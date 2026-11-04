@@ -1,0 +1,6 @@
+build/
+out/
+.vs/
+.agents/
+skills-lock.json
+cmake-build-*/
