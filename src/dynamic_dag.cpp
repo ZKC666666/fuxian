@@ -77,13 +77,28 @@ std::vector<OperationInstanceId> DynamicDag::readyOperations() const {
     return ready;
 }
 
-std::vector<DropletId> DynamicDag::startOperation(OperationInstanceId id) {
+std::optional<std::vector<DropletId>> DynamicDag::inputsIfReady(
+    OperationInstanceId id) const {
+    return resolvedInputs(operations_.at(id));
+}
+
+std::vector<DropletId> DynamicDag::reserveOperation(OperationInstanceId id) {
     auto& instance = operations_.at(id);
     auto inputs = resolvedInputs(instance);
     if (!inputs) throw std::logic_error("operation is not ready");
     for (const auto droplet : *inputs) available_droplets_.erase(droplet);
-    instance.state = OperationState::Running;
+    instance.inputs = *inputs;
+    instance.state = OperationState::Placed;
     return *inputs;
+}
+
+std::vector<DropletId> DynamicDag::startOperation(OperationInstanceId id) {
+    auto& instance = operations_.at(id);
+    if (instance.state != OperationState::Placed) {
+        throw std::logic_error("operation has not been placed");
+    }
+    instance.state = OperationState::Running;
+    return instance.inputs;
 }
 
 void DynamicDag::finishOperation(OperationInstanceId id, std::vector<DropletId> outputs,
@@ -160,6 +175,10 @@ OperationInstanceId DynamicDag::operationFor(BlockInstanceId block,
 
 const OperationInstance& DynamicDag::operation(OperationInstanceId id) const {
     return operations_.at(id);
+}
+
+OperationType DynamicDag::operationType(OperationInstanceId id) const {
+    return specFor(operations_.at(id)).type;
 }
 
 const std::string& DynamicDag::blockName(BlockInstanceId id) const {

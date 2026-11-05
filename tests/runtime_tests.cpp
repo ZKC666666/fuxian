@@ -58,16 +58,18 @@ void followsOnlyTheObservedBranch(const std::string& outcome) {
     check(contains(dag.readyOperations(), mix) && !contains(dag.readyOperations(), detect),
           "operation dependency was ignored");
 
-    check(dag.startOperation(mix) == std::vector<dmf::DropletId>({1, 2}),
+    check(dag.reserveOperation(mix) == std::vector<dmf::DropletId>({1, 2}),
           "mix received wrong droplets");
+    dag.startOperation(mix);
     dag.finishOperation(mix, {3});
     check(!contains(dag.readyOperations(), detect),
           "same-cycle output became ready before the next cycle");
     dag.advanceCycle();
     check(contains(dag.readyOperations(), detect), "detect did not become ready");
 
-    check(dag.startOperation(detect) == std::vector<dmf::DropletId>({3}),
+    check(dag.reserveOperation(detect) == std::vector<dmf::DropletId>({3}),
           "detect received wrong droplet");
+    dag.startOperation(detect);
     dag.finishOperation(detect, {4}, outcome);
     check(dag.blockCount() == 1 && !dag.allDone(),
           "branch was activated before the next cycle");
@@ -80,8 +82,9 @@ void followsOnlyTheObservedBranch(const std::string& outcome) {
     check(dag.blockName(branch) == outcome, "wrong branch was selected");
     const auto terminal = dag.operationFor(branch, outcome == "output" ? "send" : "discard");
     check(contains(dag.readyOperations(), terminal), "branch input was not transferred");
-    check(dag.startOperation(terminal) == std::vector<dmf::DropletId>({4}),
+    check(dag.reserveOperation(terminal) == std::vector<dmf::DropletId>({4}),
           "branch received wrong droplet");
+    dag.startOperation(terminal);
     dag.finishOperation(terminal, {});
     check(dag.allDone(), "completed path should finish");
 }
@@ -103,6 +106,7 @@ void repeatedBlockGetsNewOperationIds() {
 
     const auto first_block = dag.activateStart({10});
     const auto first_op = dag.operationFor(first_block, "detect");
+    dag.reserveOperation(first_op);
     dag.startOperation(first_op);
     dag.finishOperation(first_op, {11}, "retry");
     const auto retry_blocks = dag.advanceCycle();
@@ -113,14 +117,16 @@ void repeatedBlockGetsNewOperationIds() {
     check(first_block != second_block && first_op != second_op,
           "repeated CFG block reused a runtime operation id");
     check(contains(dag.readyOperations(), second_op), "retry block did not become ready");
+    dag.reserveOperation(second_op);
     dag.startOperation(second_op);
     dag.finishOperation(second_op, {12}, "finish");
     const auto final_blocks = dag.advanceCycle();
 
     check(final_blocks.size() == 1, "finish should activate one block");
     const auto terminal = dag.operationFor(final_blocks.front(), "send");
-    check(dag.startOperation(terminal) == std::vector<dmf::DropletId>({12}),
+    check(dag.reserveOperation(terminal) == std::vector<dmf::DropletId>({12}),
           "final block did not receive the newest droplet");
+    dag.startOperation(terminal);
     dag.finishOperation(terminal, {});
     check(dag.allDone() && dag.blockCount() == 3, "retry path did not finish");
 }
@@ -164,9 +170,9 @@ void oneDropletCannotStartTwoOperations() {
     const auto second = dag.operationFor(start, "second");
     check(contains(dag.readyOperations(), first) && contains(dag.readyOperations(), second),
           "both operations should initially see the droplet");
-    dag.startOperation(first);
-    check(!contains(dag.readyOperations(), second), "consumed droplet was reused");
-    rejects<std::logic_error>([&] { dag.startOperation(second); },
+    dag.reserveOperation(first);
+    check(!contains(dag.readyOperations(), second), "reserved droplet was reused");
+    rejects<std::logic_error>([&] { dag.reserveOperation(second); },
                               "second operation reused a consumed droplet");
 }
 
@@ -174,6 +180,7 @@ void badFeedbackDoesNotFinishAnOperation() {
     dmf::DynamicDag dag(branchingProtocol());
     const auto start = dag.activateStart({1, 2});
     const auto mix = dag.operationFor(start, "mix");
+    dag.reserveOperation(mix);
     dag.startOperation(mix);
     rejects<std::invalid_argument>([&] { dag.finishOperation(mix, {1}); },
                                    "existing droplet id was accepted");
@@ -183,6 +190,7 @@ void badFeedbackDoesNotFinishAnOperation() {
     dag.advanceCycle();
 
     const auto detect = dag.operationFor(start, "detect");
+    dag.reserveOperation(detect);
     dag.startOperation(detect);
     rejects<std::invalid_argument>([&] { dag.finishOperation(detect, {4}, "unknown"); },
                                    "unknown detection result was accepted");

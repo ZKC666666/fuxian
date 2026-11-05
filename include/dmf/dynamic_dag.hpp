@@ -14,13 +14,14 @@ using DropletId = int;
 using BlockInstanceId = int;
 using OperationInstanceId = int;
 
-enum class OperationState { Waiting, Running, Completed };
+enum class OperationState { Waiting, Placed, Running, Completed };
 
 struct OperationInstance {
     OperationInstanceId id;
     BlockInstanceId block_instance;
     std::string spec_id;
     OperationState state = OperationState::Waiting;
+    std::vector<DropletId> inputs;
     std::vector<DropletId> outputs;
 };
 
@@ -32,6 +33,8 @@ public:
 
     BlockInstanceId activateStart(std::vector<DropletId> entry_droplets);
     std::vector<OperationInstanceId> readyOperations() const;
+    std::optional<std::vector<DropletId>> inputsIfReady(OperationInstanceId id) const;
+    std::vector<DropletId> reserveOperation(OperationInstanceId id);
     std::vector<DropletId> startOperation(OperationInstanceId id);
     void finishOperation(OperationInstanceId id, std::vector<DropletId> outputs,
                          std::optional<std::string> outcome = std::nullopt);
@@ -43,6 +46,7 @@ public:
     bool allDone() const;
     OperationInstanceId operationFor(BlockInstanceId block, const std::string& local_id) const;
     const OperationInstance& operation(OperationInstanceId id) const;
+    OperationType operationType(OperationInstanceId id) const;
     const std::string& blockName(BlockInstanceId id) const;
 
 private:
