@@ -19,6 +19,7 @@ struct CompletionFeedback {
 struct StepReport {
     int step = 0;
     std::vector<MoveCommand> moves;
+    std::vector<MoveFeedback> observed;
     std::vector<OperationInstanceId> started;
     std::vector<OperationInstanceId> completed;
     std::size_t active_blockages = 0;
@@ -27,14 +28,17 @@ struct StepReport {
     long long blockage_update_microseconds = 0;
 };
 
-// Simulates one control step at a time. Movement feedback equals the command;
-// completion feedback is supplied by the caller when an operation finishes.
+// Simulates one control step at a time. Callers may supply observed movement;
+// by default every commanded move succeeds.
 class ExecutionLoop {
 public:
-    using FeedbackProvider = std::function<CompletionFeedback(OperationInstanceId)>;
+    using CompletionFeedbackProvider =
+        std::function<CompletionFeedback(OperationInstanceId)>;
+    using MovementFeedbackProvider = std::function<Point(const MoveCommand&, int step)>;
 
     ExecutionLoop(DynamicDag& dag, UpperLayer& upper, Router& router,
-                  FeedbackProvider feedback_provider);
+                  CompletionFeedbackProvider completion_feedback_provider,
+                  MovementFeedbackProvider movement_provider = {});
 
     StepReport step();
     void completeEarly(OperationInstanceId operation, CompletionFeedback feedback);
@@ -45,7 +49,8 @@ private:
     DynamicDag& dag_;
     UpperLayer& upper_;
     Router& router_;
-    FeedbackProvider feedback_provider_;
+    CompletionFeedbackProvider completion_feedback_provider_;
+    MovementFeedbackProvider movement_provider_;
     std::map<OperationInstanceId, int> remaining_cycles_;
     int step_count_ = 0;
 

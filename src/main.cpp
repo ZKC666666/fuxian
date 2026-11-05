@@ -176,18 +176,46 @@ dmf::Protocol timedProtocol() {
     return {"start", {{"start", std::move(block)}}};
 }
 
-void runTimedExample() {
+struct TimedExample {
+    dmf::Point second_start;
+    int duration;
+    int failed_step;
+};
+
+void runTimedExample(TimedExample example) {
     dmf::DynamicDag dag(timedProtocol());
     const auto block = dag.activateStart({1, 2});
     const auto near = dag.operationFor(block, "near");
-    dmf::DropletPositions positions{{1, {4, 4}}, {2, {0, 7}}};
+    dmf::DropletPositions positions{{1, {4, 4}}, {2, example.second_start}};
     dmf::VirtualChip chip(2, 1);
     dmf::UpperLayer upper(dag, chip,
-                          {{dmf::OperationType::Detect, {3, 3, 3}}}, positions);
+                          {{dmf::OperationType::Detect, {3, 3, example.duration}}},
+                          positions);
     dmf::Router router(chip.width(), chip.height(), positions);
-    dmf::ExecutionLoop loop(dag, upper, router, [near](int operation) {
-        return dmf::CompletionFeedback{{operation == near ? 3 : 4}, std::nullopt};
-    });
+    dmf::ExecutionLoop::MovementFeedbackProvider movement_feedback;
+    if (example.failed_step > 0) {
+        movement_feedback = [failed_step = example.failed_step](
+                                const dmf::MoveCommand& command, int step) {
+            return step == failed_step && command.droplet == 2
+                       ? command.from : command.to;
+        };
+    }
+    dmf::ExecutionLoop loop(
+        dag, upper, router,
+        [near](int operation) {
+            return dmf::CompletionFeedback{{operation == near ? 3 : 4}, std::nullopt};
+        },
+        std::move(movement_feedback));
+
+    std::cout << "chip=15x9, droplet 1=(4,4), droplet 2=("
+              << example.second_start.x << ',' << example.second_start.y
+              << "), target 2=(10,4)\n"
+              << "near module: x=3..5, y=3..5; operation duration="
+              << example.duration << '\n';
+    if (example.failed_step > 0) {
+        std::cout << "One commanded move fails at step "
+                  << example.failed_step << ".\n";
+    }
 
     long long route_time = 0;
     int steps = 0;
@@ -195,11 +223,16 @@ void runTimedExample() {
         const auto report = loop.step();
         route_time += report.routing_microseconds;
         std::cout << "step " << report.step << ": ";
-        for (const auto& move : report.moves) {
-            if (!(move.from == move.to)) {
-                std::cout << "droplet " << move.droplet << " -> ("
-                          << move.to.x << ',' << move.to.y << ") ";
+        for (std::size_t i = 0; i < report.moves.size(); ++i) {
+            const auto& move = report.moves[i];
+            const auto actual = report.observed[i].observed;
+            std::cout << "droplet " << move.droplet << " planned=("
+                      << move.to.x << ',' << move.to.y << ") actual=("
+                      << actual.x << ',' << actual.y << ")";
+            if (!(move.from == move.to) && actual == move.from) {
+                std::cout << " FAILED";
             }
+            std::cout << ' ';
         }
         for (const auto operation : report.started) {
             std::cout << "start " << (operation == near ? "near" : "far") << ' ';
@@ -219,14 +252,15 @@ void runTimedExample() {
 }  // namespace
 
 int main(int argc, char** argv) {
-    const std::string mode = argc == 1 ? "timed" : (argc == 2 ? argv[1] : "");
-    if (mode != "timed" && mode != "router" && mode != "placement" &&
+    const std::string mode = argc == 1 ? "detour" : (argc == 2 ? argv[1] : "");
+    if (mode != "detour" && mode != "timed" && mode != "router" && mode != "placement" &&
         mode != "output" && mode != "waste") {
-        std::cerr << "usage: am_dmf [timed|router|placement|output|waste]\n";
+        std::cerr << "usage: am_dmf [detour|timed|router|placement|output|waste]\n";
         return 2;
     }
     try {
-        if (mode == "timed") runTimedExample();
+        if (mode == "detour") runTimedExample({{0, 4}, 20, 2});
+        else if (mode == "timed") runTimedExample({{0, 7}, 3, 0});
         else if (mode == "router") runRouterExample();
         else if (mode == "placement") runPlacementExample();
         else runExample(mode);

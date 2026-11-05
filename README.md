@@ -2,7 +2,7 @@
 
 本工程依据论文 [A Two-Layer Decoupled Synthesis Framework for Uncertain Biochemical Protocols on Active-Matrix Digital Microfluidic Platforms](https://doi.org/10.1109/TCAD.2026.3721419) 逐步复现。论文给出了框架和伪代码，没有公开完整实现与实验生成程序。工程使用 C++17，文档使用中文。
 
-当前 `main` 分支处于 **v0.4：带操作时长的双层控制循环**。每个正式版本都用 Git 标签保存；桌面的 `PROJECT/versions/版本号` 是可独立用 Visual Studio 打开的源码副本。此前可运行但简化较多的探索原型保存在 Git 标签 `v0.0-prototype`，不作为论文数值复现结果。
+当前 `main` 分支处于 **v0.5：移动反馈与强制绕障演示**。每个正式版本都用 Git 标签保存；桌面的 `PROJECT/versions/版本号` 是可独立用 Visual Studio 打开的源码副本。此前可运行但简化较多的探索原型保存在 Git 标签 `v0.0-prototype`，不作为论文数值复现结果。
 
 ## 先理解两个图
 
@@ -120,9 +120,19 @@ droplet 1 0 0 4 4
 
 例如时长为 3 的操作若在第 1 步启动，第 2、3、4 步末分别消耗一个运行步，在第 4 步末完成。同一时间，其他液滴仍可继续路由。操作一开始，模块区域成为 blockage；完成时立即解除。`completeEarly` 可提前提交实际完成反馈并释放模块，输出仍从下一步开始可用。到达晚于预计时间的操作不会提前计时，模块也只有在真正启动后才成为运行障碍。
 
-`src/main.cpp` 的默认演示放置两项独立 Detect：近处液滴立即启动，另一滴绕开运行模块继续前进。每步会显示移动、启动、完成及 blockage 数量；结束时显示代价场构建次数和 Router 决策的累计微秒数。计时只包住 `Router::planStep()`，不含控制台打印、上层选址、模拟反馈，也不代表硬件实时性保证。控制循环在单线程中按序模拟“路由与操作在同一时间段推进”，尚未实现后台计算线程或真实电极驱动。
+v0.4 的 `timed` 演示放置两项独立 Detect：近处液滴立即启动，另一滴在操作运行时继续前进。每步会显示移动、启动、完成及 blockage 数量；结束时显示代价场构建次数和 Router 决策的累计微秒数。计时只包住 `Router::planStep()`，不含控制台打印、上层选址、模拟反馈，也不代表硬件实时性保证。控制循环在单线程中按序模拟“路由与操作在同一时间段推进”，尚未实现后台计算线程或真实电极驱动。
 
 `tests/execution_tests.cpp` 检验并行推进、操作时长、动态 blockage、输出下一步可用与提前完成；此前的测试仍保留。
+
+## v0.5 新增：实际位置反馈与强制绕障
+
+v0.4 的控制循环总假设液滴按命令成功移动。现在可向 `ExecutionLoop` 提供一个移动反馈函数：每收到一条移动命令，返回这一控制步观测到的液滴位置。反馈可为原位置（移动失败）或命令指定的下一位置（移动成功）；Router 会检查反馈是否合法，并以**实际位置**判断是否到达、下一步从哪里继续规划。`StepReport` 同时保留 `moves`（计划动作）和 `observed`（实际反馈）。不提供反馈函数时，沿用原先“移动总成功”的默认行为。
+
+默认 `detour` 演示仍使用 **15×9** 阵列，两滴液体的起点改为 `(4,4)` 和 `(0,4)`；液滴 2 的目标是 `(10,4)`。横向直走会穿过 near 操作占用的 `x=3～5、y=3～5`，因此它必须先离开 `y=4`，绕过活动模块。示例把两项 Detect 的运行时长都设为 20 个控制步，并在第 2 步故意让液滴 2 的一次移动失败；这些数值和失败事件都是**用于验证的工程设置**，不是论文实验参数。
+
+控制台的 `planned=(x,y)` 是 Router 希望到达的位置，`actual=(x,y)` 是反馈确认的位置。第 2 步会出现 `FAILED`，第 3 步重新从实际位置出发；液滴 2 随后沿上方绕行，并在 near 尚未完成时启动 far，此时 `blockages=2`。完成反馈和先前版本一样使模块释放。测试另外覆盖“最后一步移动失败时不能误报到达和启动操作”，并检查绕行期间不进入活动模块、最终完成两项操作。
+
+此反馈入口用于模拟电极位置观测，尚未连接真实传感器。微秒计时仍仅统计 Router 规划动作，不含反馈函数和控制台输出。
 
 ## 编译与运行
 
@@ -134,10 +144,12 @@ cmake --build build --config Debug
 ctest --test-dir build -C Debug --output-on-failure
 ```
 
-演示程序不填参数时运行 v0.4 的带计时双层演示；`router` 保留 v0.3 的逐步路由演示，`placement` 保留 v0.2 的手动到达演示；`output` 和 `waste` 保留 v0.1 的 CFG 分支演示。使用 Visual Studio 多配置生成器时，例如：
+演示程序不填参数时运行 v0.5 的强制绕障与失败反馈演示；`timed` 保留 v0.4 的原演示，`router` 保留 v0.3 的逐步路由演示，`placement` 保留 v0.2 的手动到达演示；`output` 和 `waste` 保留 v0.1 的 CFG 分支演示。使用 Visual Studio 多配置生成器时，例如：
 
 ```powershell
 .\build\Debug\am_dmf.exe
+.\build\Debug\am_dmf.exe detour
+.\build\Debug\am_dmf.exe timed
 .\build\Debug\am_dmf.exe router
 .\build\Debug\am_dmf.exe placement
 .\build\Debug\am_dmf.exe output
@@ -145,12 +157,12 @@ ctest --test-dir build -C Debug --output-on-failure
 .\build\Debug\dmf_custom_route.exe
 ```
 
-若使用单配置生成器，可执行文件通常位于构建目录下。在 Visual Studio 中通过“文件 → 打开 → 文件夹”打开 `PROJECT/versions/v0.4`，等待 CMake 配置完成。选择 `am_dmf.exe` 并按 Ctrl+F5，可观察带计时的双层演示；选择 `dmf_custom_route.exe` 可继续运行自己编辑的 `examples/route_case.txt`。版本文件夹包含完整源码和 `CMakeLists.txt`，不依赖主工程的构建结果。
+若使用单配置生成器，可执行文件通常位于构建目录下。在 Visual Studio 中通过“文件 → 打开 → 文件夹”打开 `PROJECT/versions/v0.5`，等待 CMake 配置完成。选择 `am_dmf.exe` 并按 Ctrl+F5，可观察强制绕障与移动失败演示；选择 `dmf_custom_route.exe` 可继续运行自己编辑的 `examples/route_case.txt`。版本文件夹包含完整源码和 `CMakeLists.txt`，不依赖主工程的构建结果。
 
 ## 当前边界与后续步骤
 
-v0.4 已实现示例模块时长和“一个操作运行时其他液滴继续路由”的协同演示。当前只有 Mix、Detect 进入物理选址与路由；**还没有**真实电极驱动序列、异步代价场计算线程、在新障碍内被困液滴的撤离策略，也没有论文实验所用的执行周期统计。`Output`、`Waste` 仍只有逻辑演示，没有物理端口模型。
+v0.5 已用强制绕障和失败反馈检验双层控制循环。当前只有 Mix、Detect 进入物理选址与路由；**还没有**真实电极驱动序列、异步代价场计算线程、在新障碍内被困液滴的撤离策略，也没有论文实验所用的执行周期统计。`Output`、`Waste` 仍只有逻辑演示，没有物理端口模型。
 
-论文没有精确规定所有周期内事件的先后边界。当前固定为“本步完成的操作，其输出液滴和检测分支从下一步开始可用”；这是工程假设。当前 `ExecutionLoop` 使用理想移动反馈：发出移动命令后，假定液滴按命令到达。Router 本身仍能接受移动失败的实际位置反馈，但这条控制循环尚未接硬件反馈入口。
+论文没有精确规定所有周期内事件的先后边界。当前固定为“本步完成的操作，其输出液滴和检测分支从下一步开始可用”；这是工程假设。`ExecutionLoop` 默认使用理想移动反馈，v0.5 允许注入失败或成功的位置反馈，但尚未接硬件反馈入口。
 
 下一步可完善端口、更多操作类型及异步代价场更新，再构造基准和对照方法；PIBT 改进在原论文版本稳定后单独开展。每个完成版本都同时保存 GitHub 标签和 `PROJECT/versions/版本号` 的源码副本。

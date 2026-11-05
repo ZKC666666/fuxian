@@ -14,10 +14,14 @@ long long elapsedMicroseconds(Clock::time_point start) {
 }  // namespace
 
 ExecutionLoop::ExecutionLoop(DynamicDag& dag, UpperLayer& upper, Router& router,
-                             FeedbackProvider feedback_provider)
+                             CompletionFeedbackProvider completion_feedback_provider,
+                             MovementFeedbackProvider movement_provider)
     : dag_(dag), upper_(upper), router_(router),
-      feedback_provider_(std::move(feedback_provider)) {
-    if (!feedback_provider_) throw std::invalid_argument("completion feedback provider is empty");
+      completion_feedback_provider_(std::move(completion_feedback_provider)),
+      movement_provider_(std::move(movement_provider)) {
+    if (!completion_feedback_provider_) {
+        throw std::invalid_argument("completion feedback provider is empty");
+    }
 }
 
 void ExecutionLoop::recordStart(OperationInstanceId operation, StepReport& report) {
@@ -62,12 +66,14 @@ StepReport ExecutionLoop::step() {
         const auto routing_start = Clock::now();
         report.moves = router_.planStep();
         report.routing_microseconds = elapsedMicroseconds(routing_start);
-        std::vector<MoveFeedback> observed;
-        observed.reserve(report.moves.size());
+        report.observed.reserve(report.moves.size());
         for (const auto& move : report.moves) {
-            observed.push_back({move.droplet, move.to});
+            const auto position = movement_provider_
+                                      ? movement_provider_(move, report.step)
+                                      : move.to;
+            report.observed.push_back({move.droplet, position});
         }
-        acceptArrivals(router_.applyFeedback(observed), report);
+        acceptArrivals(router_.applyFeedback(report.observed), report);
         acceptStarts(upper_.tryStartPlacedOperations(), report);
     }
 
@@ -76,7 +82,7 @@ StepReport ExecutionLoop::step() {
             --remaining_cycles_.at(operation);
             continue;
         }
-        auto feedback = feedback_provider_(operation);
+        auto feedback = completion_feedback_provider_(operation);
         upper_.finishOperation(operation, std::move(feedback.outputs),
                                std::move(feedback.outcome));
         remaining_cycles_.erase(operation);
