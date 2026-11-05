@@ -188,6 +188,17 @@ void occupiedLocationDelaysOperationStart() {
           "operation did not start after the location became clear");
 }
 
+void operationDurationMustBePositive() {
+    dmf::DynamicDag dag(mixThenDetect());
+    dmf::DropletPositions positions{{1, {0, 4}}, {2, {2, 4}}};
+    rejects<std::invalid_argument>(
+        [&] {
+            dmf::UpperLayer upper(dag, dmf::VirtualChip(1, 1),
+                                  {{dmf::OperationType::Mix, {3, 3, 0}}}, positions);
+        },
+        "zero operation duration was accepted");
+}
+
 }  // namespace
 
 int main() {
@@ -198,6 +209,7 @@ int main() {
         failedFeedbackKeepsPlacement();
         nearestTieUsesStableOrder();
         occupiedLocationDelaysOperationStart();
+        operationDurationMustBePositive();
         std::cout << "placement tests: passed\n";
     } catch (const std::exception& error) {
         std::cerr << "placement tests: " << error.what() << '\n';

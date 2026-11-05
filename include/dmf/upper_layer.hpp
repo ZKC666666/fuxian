@@ -23,6 +23,7 @@ public:
                          std::optional<std::string> outcome = std::nullopt);
 
     bool hasPlacement(OperationInstanceId operation) const;
+    int durationFor(OperationInstanceId operation) const;
     const VirtualModule& moduleFor(OperationInstanceId operation) const;
     std::vector<VirtualModule> activeBlockages() const;
     Point positionOf(DropletId droplet) const;

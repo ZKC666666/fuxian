@@ -19,6 +19,7 @@ using DropletPositions = std::map<DropletId, Point>;
 struct ModuleProfile {
     int width;
     int height;
+    int duration_cycles = 1;
 };
 
 struct VirtualModule {

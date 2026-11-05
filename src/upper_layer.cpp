@@ -13,6 +13,7 @@ UpperLayer::UpperLayer(DynamicDag& dag, VirtualChip chip,
     for (const auto& [type, profile] : profiles_) {
         if ((type != OperationType::Mix && type != OperationType::Detect) ||
             profile.width <= 0 || profile.height <= 0 ||
+            profile.duration_cycles <= 0 ||
             profile.width > chip_.moduleSide() || profile.height > chip_.moduleSide() ||
             (type == OperationType::Mix && profile.width < 3)) {
             throw std::invalid_argument("unsupported module profile");
@@ -115,6 +116,10 @@ void UpperLayer::finishOperation(OperationInstanceId operation,
 
 bool UpperLayer::hasPlacement(OperationInstanceId operation) const {
     return placements_.count(operation) != 0;
+}
+
+int UpperLayer::durationFor(OperationInstanceId operation) const {
+    return profiles_.at(dag_.operationType(operation)).duration_cycles;
 }
 
 const VirtualModule& UpperLayer::moduleFor(OperationInstanceId operation) const {

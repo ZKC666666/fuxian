@@ -1,4 +1,5 @@
 #include "dmf/dynamic_dag.hpp"
+#include "dmf/execution_loop.hpp"
 #include "dmf/router.hpp"
 #include "dmf/upper_layer.hpp"
 
@@ -164,17 +165,69 @@ void runRouterExample() {
     std::cout << "cost fields built: " << router.costFieldBuilds() << '\n';
 }
 
+dmf::Protocol timedProtocol() {
+    using dmf::InputRef;
+    using dmf::OperationType;
+    dmf::BlockSpec block{
+        "start", 2,
+        {{"near", OperationType::Detect, {InputRef::entry(0)}, 1},
+         {"far", OperationType::Detect, {InputRef::entry(1)}, 1}},
+        std::nullopt};
+    return {"start", {{"start", std::move(block)}}};
+}
+
+void runTimedExample() {
+    dmf::DynamicDag dag(timedProtocol());
+    const auto block = dag.activateStart({1, 2});
+    const auto near = dag.operationFor(block, "near");
+    dmf::DropletPositions positions{{1, {4, 4}}, {2, {0, 7}}};
+    dmf::VirtualChip chip(2, 1);
+    dmf::UpperLayer upper(dag, chip,
+                          {{dmf::OperationType::Detect, {3, 3, 3}}}, positions);
+    dmf::Router router(chip.width(), chip.height(), positions);
+    dmf::ExecutionLoop loop(dag, upper, router, [near](int operation) {
+        return dmf::CompletionFeedback{{operation == near ? 3 : 4}, std::nullopt};
+    });
+
+    long long route_time = 0;
+    int steps = 0;
+    while (!loop.allDone() && steps++ < 100) {
+        const auto report = loop.step();
+        route_time += report.routing_microseconds;
+        std::cout << "step " << report.step << ": ";
+        for (const auto& move : report.moves) {
+            if (!(move.from == move.to)) {
+                std::cout << "droplet " << move.droplet << " -> ("
+                          << move.to.x << ',' << move.to.y << ") ";
+            }
+        }
+        for (const auto operation : report.started) {
+            std::cout << "start " << (operation == near ? "near" : "far") << ' ';
+        }
+        for (const auto operation : report.completed) {
+            std::cout << "finish " << (operation == near ? "near" : "far") << ' ';
+        }
+        std::cout << "blockages=" << report.active_blockages << '\n';
+    }
+    if (!loop.allDone()) throw std::runtime_error("timed example exceeded 100 steps");
+    std::cout << "all operations completed: " << std::boolalpha << loop.allDone() << '\n';
+    std::cout << "cost fields built: " << router.costFieldBuilds() << '\n';
+    std::cout << "router planning total (microseconds, excluding output): "
+              << route_time << '\n';
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
-    const std::string mode = argc == 1 ? "router" : (argc == 2 ? argv[1] : "");
-    if (mode != "router" && mode != "placement" &&
+    const std::string mode = argc == 1 ? "timed" : (argc == 2 ? argv[1] : "");
+    if (mode != "timed" && mode != "router" && mode != "placement" &&
         mode != "output" && mode != "waste") {
-        std::cerr << "usage: am_dmf [router|placement|output|waste]\n";
+        std::cerr << "usage: am_dmf [timed|router|placement|output|waste]\n";
         return 2;
     }
     try {
-        if (mode == "router") runRouterExample();
+        if (mode == "timed") runTimedExample();
+        else if (mode == "router") runRouterExample();
         else if (mode == "placement") runPlacementExample();
         else runExample(mode);
     } catch (const std::exception& error) {
