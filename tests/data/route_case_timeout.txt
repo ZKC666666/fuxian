@@ -1,0 +1,4 @@
+chip 5 5
+max_steps 1
+trace 0
+droplet 1 0 0 4 4

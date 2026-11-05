@@ -1,0 +1,4 @@
+chip 5 5
+separation 2
+droplet 1 0 0 4 4
+droplet 2 1 0 4 2

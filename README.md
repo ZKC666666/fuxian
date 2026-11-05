@@ -2,7 +2,7 @@
 
 本工程依据论文 [A Two-Layer Decoupled Synthesis Framework for Uncertain Biochemical Protocols on Active-Matrix Digital Microfluidic Platforms](https://doi.org/10.1109/TCAD.2026.3721419) 逐步复现。论文给出了框架和伪代码，没有公开完整实现与实验生成程序。工程使用 C++17，文档使用中文。
 
-当前 `main` 分支处于 **v0.3：下层 Router 核心与双层到达反馈**。每个正式版本都用 Git 标签保存；桌面的 `PROJECT/versions/版本号` 是可独立用 Visual Studio 打开的源码副本。此前可运行但简化较多的探索原型保存在 Git 标签 `v0.0-prototype`，不作为论文数值复现结果。
+当前 `main` 分支处于 **v0.3.1：可编辑的 Router 实验入口**。每个正式版本都用 Git 标签保存；桌面的 `PROJECT/versions/版本号` 是可独立用 Visual Studio 打开的源码副本。此前可运行但简化较多的探索原型保存在 Git 标签 `v0.0-prototype`，不作为论文数值复现结果。
 
 ## 先理解两个图
 
@@ -83,6 +83,24 @@ v0.3 在 `RoutingTask` 对应的目标与 `UpperLayer` 之间接入 `Router`。�
 
 `Router` 的状态与操作完成仍分开：液滴真实到达会自动通知上层；Mix、Detect 的完成时刻和输出编号在示例中仍由程序报告。`cycle` 目前只是 dynamic DAG 的逻辑周期，不等于论文的物理执行周期。
 
+## v0.3.1 新增：自己设置起点和终点
+
+这一版增加了独立的 `dmf_custom_route.exe`。它只使用下层 Router，不运行 `Mix → Detect` 协议或上层选址。你可以在 `examples/route_case.txt` 中填写阵列尺寸和多滴液体的起终点；重新运行程序就会读取新内容，无需重新编译。默认文件如下：
+
+```text
+chip 5 5
+separation 2
+max_steps 50
+trace 1
+droplet 1 0 0 4 4
+```
+
+`chip` 后是阵列宽度、高度，所以这里是 `5×5`；坐标从 `(0,0)` 开始。`droplet` 一行依次写“编号、起点 x、起点 y、终点 x、终点 y”。增加更多 `droplet` 行即可测试多滴液体。`separation` 是可配置的安全距离；`max_steps` 是最多尝试的控制步数；`trace 1` 打印每一步，`trace 0` 只显示到达事件与最终结果，可减少大量控制台输出。以 `#` 开头的文字是注释。
+
+输入会检查阵列大小、坐标范围、重复编号和起点安全距离。当前实验入口限制为最多 90000 个电极、400 滴液体、100000 个控制步，以免误填参数后长时间占用计算资源。若超过步数，程序会列出尚未到达的液滴、当前位置和目标位置；连续 10 步没有任何液滴移动时也会停止。**停止只说明当前路由策略未完成这次实验，不证明该布局在数学上无解。**
+
+输入文件在程序启动时解析一次；正常控制步仍使用 v0.3 的 Router 与代价场缓存。打印大量轨迹会影响你观察到的总运行时间，因此需要评估计算性能时应将 `trace` 设为 `0`。目前没有把这项自定义实验的运行时间当作论文性能复现结果。
+
 ## 编译与运行
 
 需要 C++17 编译器和 CMake。在已配置好编译器的终端中执行：
@@ -101,9 +119,10 @@ ctest --test-dir build -C Debug --output-on-failure
 .\build\Debug\am_dmf.exe placement
 .\build\Debug\am_dmf.exe output
 .\build\Debug\am_dmf.exe waste
+.\build\Debug\dmf_custom_route.exe
 ```
 
-若使用单配置生成器，可执行文件通常位于构建目录下。在 Visual Studio 中通过“文件 → 打开 → 文件夹”打开 `PROJECT/versions/v0.3`，等待 CMake 配置完成后选择 `am_dmf.exe` 作为启动项，按 Ctrl+F5 即可运行默认的 v0.3 示例。版本文件夹包含完整源码和 `CMakeLists.txt`，不依赖主工程的构建结果。
+若使用单配置生成器，可执行文件通常位于构建目录下。在 Visual Studio 中通过“文件 → 打开 → 文件夹”打开 `PROJECT/versions/v0.3.1`，等待 CMake 配置完成。选择 `dmf_custom_route.exe` 并按 Ctrl+F5，可运行自己编辑的 `examples/route_case.txt`；选择 `am_dmf.exe` 则运行原来的双层演示。版本文件夹包含完整源码和 `CMakeLists.txt`，不依赖主工程的构建结果。
 
 ## 当前边界与后续步骤
 
