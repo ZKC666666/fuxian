@@ -1,6 +1,6 @@
 #pragma once
 
-#include "dmf/placement.hpp"
+#include "dmf/routing_task.hpp"
 
 #include <map>
 #include <optional>
@@ -9,22 +9,16 @@
 
 namespace dmf {
 
-struct RoutingTask {
-    OperationInstanceId operation;
-    DropletId droplet;
-    Point target;
-    int module_id;
-};
-
 // Coordinates the dynamic DAG, virtual-module placement, and arrival feedback.
 class UpperLayer {
 public:
     UpperLayer(DynamicDag& dag, VirtualChip chip,
                std::map<OperationType, ModuleProfile> profiles,
-               std::map<DropletId, Point> initial_positions);
+               DropletPositions& positions);
 
     std::vector<RoutingTask> placeReadyOperations();
     bool reportArrival(OperationInstanceId operation, DropletId droplet);
+    std::vector<OperationInstanceId> tryStartPlacedOperations();
     void finishOperation(OperationInstanceId operation, std::vector<DropletId> outputs,
                          std::optional<std::string> outcome = std::nullopt);
 
@@ -45,12 +39,13 @@ private:
     DynamicDag& dag_;
     VirtualChip chip_;
     std::map<OperationType, ModuleProfile> profiles_;
-    std::map<DropletId, Point> positions_;
+    DropletPositions& positions_;
     std::map<OperationInstanceId, Placement> placements_;
 
     static std::vector<Point> targetsFor(OperationType type,
                                          const VirtualModule& module,
                                          std::size_t input_count);
+    bool tryStart(Placement& placement, OperationInstanceId operation);
 };
 
 }  // namespace dmf

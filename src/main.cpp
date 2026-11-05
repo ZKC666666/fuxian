@@ -1,10 +1,12 @@
 #include "dmf/dynamic_dag.hpp"
+#include "dmf/router.hpp"
 #include "dmf/upper_layer.hpp"
 
 #include <iostream>
 #include <stdexcept>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace {
 
@@ -56,7 +58,7 @@ void runExample(const std::string& outcome) {
     std::cout << "all operations completed: " << std::boolalpha << dag.allDone() << '\n';
 }
 
-void runPlacementExample() {
+dmf::Protocol placementProtocol() {
     using dmf::InputRef;
     using dmf::OperationType;
     dmf::BlockSpec block{
@@ -64,12 +66,18 @@ void runPlacementExample() {
         {{"mix", OperationType::Mix, {InputRef::entry(0), InputRef::entry(1)}, 1},
          {"detect", OperationType::Detect, {InputRef::output("mix")}, 1}},
         std::nullopt};
-    dmf::DynamicDag dag({"start", {{"start", std::move(block)}}});
+    return {"start", {{"start", std::move(block)}}};
+}
+
+void runPlacementExample() {
+    using dmf::OperationType;
+    dmf::DynamicDag dag(placementProtocol());
     const auto start = dag.activateStart({1, 2});
+    dmf::DropletPositions positions{{1, {0, 4}}, {2, {2, 4}}};
     dmf::UpperLayer upper(dag, dmf::VirtualChip(2, 1),
                           {{OperationType::Mix, {3, 3}},
                            {OperationType::Detect, {3, 3}}},
-                          {{1, {0, 4}}, {2, {2, 4}}});
+                          positions);
 
     const auto mix = dag.operationFor(start, "mix");
     const auto mix_tasks = upper.placeReadyOperations();
@@ -77,6 +85,7 @@ void runPlacementExample() {
     for (const auto& task : mix_tasks) {
         std::cout << "route droplet " << task.droplet << " to ("
                   << task.target.x << ',' << task.target.y << ")\n";
+        positions[task.droplet] = task.target;  // v0.2-style manual arrival.
         const bool started = upper.reportArrival(task.operation, task.droplet);
         std::cout << "mix started: " << std::boolalpha << started << '\n';
     }
@@ -87,22 +96,86 @@ void runPlacementExample() {
     const auto detect = dag.operationFor(start, "detect");
     const auto detect_tasks = upper.placeReadyOperations();
     std::cout << "detect placed at module " << upper.moduleFor(detect).id << '\n';
+    positions[detect_tasks.at(0).droplet] = detect_tasks.at(0).target;
     upper.reportArrival(detect_tasks.at(0).operation, detect_tasks.at(0).droplet);
     upper.finishOperation(detect, {4});
     dag.advanceCycle();
     std::cout << "all operations completed: " << std::boolalpha << dag.allDone() << '\n';
 }
 
+void routeUntilRunning(dmf::DynamicDag& dag, dmf::UpperLayer& upper,
+                       dmf::Router& router, dmf::OperationInstanceId operation) {
+    const auto tasks = upper.placeReadyOperations();
+    for (const auto& task : tasks) {
+        std::cout << "route droplet " << task.droplet << " to ("
+                  << task.target.x << ',' << task.target.y << ")\n";
+    }
+    for (const auto& arrival : router.addTasks(tasks)) {
+        upper.reportArrival(arrival.operation, arrival.droplet);
+    }
+    for (int step = 1; step <= 100 &&
+                       dag.operation(operation).state != dmf::OperationState::Running; ++step) {
+        router.setBlockages(upper.activeBlockages());
+        const auto commands = router.planStep();
+        if (commands.empty()) throw std::runtime_error("routing made no progress");
+        std::vector<dmf::MoveFeedback> feedback;
+        for (const auto& command : commands) {
+            feedback.push_back({command.droplet, command.to});
+            if (!(command.from == command.to)) {
+                std::cout << "step " << step << ": droplet " << command.droplet
+                          << " -> (" << command.to.x << ',' << command.to.y << ")\n";
+            }
+        }
+        for (const auto& arrival : router.applyFeedback(feedback)) {
+            upper.reportArrival(arrival.operation, arrival.droplet);
+        }
+        upper.tryStartPlacedOperations();
+    }
+    if (dag.operation(operation).state != dmf::OperationState::Running) {
+        throw std::runtime_error("routing did not start the operation within 100 steps");
+    }
+    router.setBlockages(upper.activeBlockages());
+}
+
+void runRouterExample() {
+    using dmf::OperationType;
+    dmf::DynamicDag dag(placementProtocol());
+    const auto start = dag.activateStart({1, 2});
+    dmf::DropletPositions positions{{1, {0, 4}}, {2, {2, 4}}};
+    dmf::VirtualChip chip(2, 1);
+    dmf::UpperLayer upper(dag, chip,
+                          {{OperationType::Mix, {3, 3}},
+                           {OperationType::Detect, {3, 3}}}, positions);
+    dmf::Router router(chip.width(), chip.height(), positions);
+
+    const auto mix = dag.operationFor(start, "mix");
+    routeUntilRunning(dag, upper, router, mix);
+    std::cout << "mix started after physical arrival\n";
+    upper.finishOperation(mix, {3});  // Operation timing is not modeled yet.
+    router.setBlockages(upper.activeBlockages());
+    dag.advanceCycle();
+
+    const auto detect = dag.operationFor(start, "detect");
+    routeUntilRunning(dag, upper, router, detect);
+    std::cout << "detect started after physical arrival\n";
+    upper.finishOperation(detect, {4});
+    dag.advanceCycle();
+    std::cout << "all operations completed: " << std::boolalpha << dag.allDone() << '\n';
+    std::cout << "cost fields built: " << router.costFieldBuilds() << '\n';
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
-    const std::string mode = argc == 1 ? "placement" : (argc == 2 ? argv[1] : "");
-    if (mode != "placement" && mode != "output" && mode != "waste") {
-        std::cerr << "usage: am_dmf [placement|output|waste]\n";
+    const std::string mode = argc == 1 ? "router" : (argc == 2 ? argv[1] : "");
+    if (mode != "router" && mode != "placement" &&
+        mode != "output" && mode != "waste") {
+        std::cerr << "usage: am_dmf [router|placement|output|waste]\n";
         return 2;
     }
     try {
-        if (mode == "placement") runPlacementExample();
+        if (mode == "router") runRouterExample();
+        else if (mode == "placement") runPlacementExample();
         else runExample(mode);
     } catch (const std::exception& error) {
         std::cerr << "error: " << error.what() << '\n';

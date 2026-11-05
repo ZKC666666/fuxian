@@ -29,9 +29,7 @@ VirtualChip::VirtualChip(int columns, int rows, int module_side)
 }
 
 bool VirtualChip::contains(Point point) const {
-    const int width = module_side_ * (2 * columns_ + 1);
-    const int height = module_side_ * (2 * rows_ + 1);
-    return point.x >= 0 && point.x < width && point.y >= 0 && point.y < height;
+    return point.x >= 0 && point.x < width() && point.y >= 0 && point.y < height();
 }
 
 std::optional<VirtualModule> VirtualChip::nearestFree(

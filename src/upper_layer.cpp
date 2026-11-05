@@ -7,9 +7,9 @@ namespace dmf {
 
 UpperLayer::UpperLayer(DynamicDag& dag, VirtualChip chip,
                        std::map<OperationType, ModuleProfile> profiles,
-                       std::map<DropletId, Point> initial_positions)
+                       DropletPositions& positions)
     : dag_(dag), chip_(std::move(chip)), profiles_(std::move(profiles)),
-      positions_(std::move(initial_positions)) {
+      positions_(positions) {
     for (const auto& [type, profile] : profiles_) {
         if ((type != OperationType::Mix && type != OperationType::Detect) ||
             profile.width <= 0 || profile.height <= 0 ||
@@ -69,13 +69,36 @@ bool UpperLayer::reportArrival(OperationInstanceId operation, DropletId droplet)
     if (target == placement.targets.end()) {
         throw std::invalid_argument("droplet is not routed to this operation");
     }
-    if (!placement.arrived.insert(droplet).second) return false;
-    positions_[droplet] = target->second;
-    if (placement.arrived.size() != placement.inputs.size()) return false;
+    if (!(positions_.at(droplet) == target->second)) {
+        throw std::logic_error("droplet has not reached its routing target");
+    }
+    placement.arrived.insert(droplet);
+    return tryStart(placement, operation);
+}
 
+bool UpperLayer::tryStart(Placement& placement, OperationInstanceId operation) {
+    if (placement.running || placement.arrived.size() != placement.inputs.size()) return false;
+    const auto& module = placement.module;
+    for (const auto& [droplet, position] : positions_) {
+        if (placement.targets.count(droplet) != 0) continue;
+        if (position.x >= module.top_left.x &&
+            position.x < module.top_left.x + module.side &&
+            position.y >= module.top_left.y &&
+            position.y < module.top_left.y + module.side) {
+            return false;
+        }
+    }
     dag_.startOperation(operation);
     placement.running = true;
     return true;
+}
+
+std::vector<OperationInstanceId> UpperLayer::tryStartPlacedOperations() {
+    std::vector<OperationInstanceId> started;
+    for (auto& [operation, placement] : placements_) {
+        if (tryStart(placement, operation)) started.push_back(operation);
+    }
+    return started;
 }
 
 void UpperLayer::finishOperation(OperationInstanceId operation,

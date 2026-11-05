@@ -37,10 +37,11 @@ void operationWaitsForBothArrivals() {
     dmf::DynamicDag dag(mixThenDetect());
     const auto block = dag.activateStart({1, 2});
     const auto mix = dag.operationFor(block, "mix");
+    dmf::DropletPositions positions{{1, {0, 4}}, {2, {2, 4}}};
     dmf::UpperLayer upper(dag, dmf::VirtualChip(2, 1),
                           {{dmf::OperationType::Mix, {3, 3}},
                            {dmf::OperationType::Detect, {3, 3}}},
-                          {{1, {0, 4}}, {2, {2, 4}}});
+                          positions);
 
     const auto tasks = upper.placeReadyOperations();
     check(tasks.size() == 2 && upper.moduleFor(mix).id == 1,
@@ -52,10 +53,14 @@ void operationWaitsForBothArrivals() {
           "placement was treated as active execution");
     rejects<std::logic_error>([&] { upper.finishOperation(mix, {3}); },
                               "operation finished before its droplets arrived");
+    rejects<std::logic_error>([&] { upper.reportArrival(mix, 1); },
+                              "arrival was accepted before the droplet reached its target");
+    positions[1] = tasks[0].target;
     check(!upper.reportArrival(mix, 1) && !upper.reportArrival(mix, 1),
           "one droplet or duplicate feedback started the operation");
     check(dag.operation(mix).state == dmf::OperationState::Placed,
           "operation started after only one arrival");
+    positions[2] = tasks[1].target;
     check(upper.reportArrival(mix, 2) &&
               dag.operation(mix).state == dmf::OperationState::Running &&
               upper.activeBlockages().size() == 1,
@@ -71,6 +76,7 @@ void operationWaitsForBothArrivals() {
     check(detect_tasks.size() == 1 && detect_tasks[0].droplet == 3 &&
               upper.moduleFor(detect).id == 1,
           "detect did not use the newly available droplet and free module");
+    positions[3] = detect_tasks[0].target;
     check(upper.reportArrival(detect, 3), "detect did not start on arrival");
     upper.finishOperation(detect, {4});
     dag.advanceCycle();
@@ -89,15 +95,20 @@ void occupiedModuleDefersAnotherOperation() {
     const auto start = dag.activateStart({1, 2, 3, 4});
     const auto first = dag.operationFor(start, "first");
     const auto second = dag.operationFor(start, "second");
+    dmf::DropletPositions positions{{1, {0, 1}}, {2, {0, 3}},
+                                    {3, {1, 0}}, {4, {3, 0}}};
     dmf::UpperLayer upper(dag, dmf::VirtualChip(1, 1),
                           {{OperationType::Mix, {3, 3}}},
-                          {{1, {0, 1}}, {2, {0, 3}}, {3, {1, 0}}, {4, {3, 0}}});
+                          positions);
 
-    check(upper.placeReadyOperations().size() == 2 && upper.hasPlacement(first) &&
+    const auto tasks = upper.placeReadyOperations();
+    check(tasks.size() == 2 && upper.hasPlacement(first) &&
               !upper.hasPlacement(second),
           "one module accepted two simultaneous reservations");
     check(dag.operation(second).state == dmf::OperationState::Waiting,
           "operation without a free module stopped waiting");
+    positions[1] = tasks[0].target;
+    positions[2] = tasks[1].target;
     upper.reportArrival(first, 1);
     upper.reportArrival(first, 2);
     upper.finishOperation(first, {5});
@@ -117,8 +128,9 @@ void sharedDropletIsReservedOnce() {
     const auto start = dag.activateStart({1});
     const auto first = dag.operationFor(start, "first");
     const auto second = dag.operationFor(start, "second");
+    dmf::DropletPositions positions{{1, {0, 4}}};
     dmf::UpperLayer upper(dag, dmf::VirtualChip(2, 1),
-                          {{OperationType::Detect, {3, 3}}}, {{1, {0, 4}}});
+                          {{OperationType::Detect, {3, 3}}}, positions);
 
     check(upper.placeReadyOperations().size() == 1 && upper.hasPlacement(first) &&
               !upper.hasPlacement(second) && dag.inputsIfReady(second) == std::nullopt,
@@ -129,12 +141,15 @@ void failedFeedbackKeepsPlacement() {
     dmf::DynamicDag dag(mixThenDetect());
     const auto start = dag.activateStart({1, 2});
     const auto mix = dag.operationFor(start, "mix");
+    dmf::DropletPositions positions{{1, {0, 4}}, {2, {2, 4}}};
     dmf::UpperLayer upper(dag, dmf::VirtualChip(1, 1),
                           {{dmf::OperationType::Mix, {3, 3}}},
-                          {{1, {0, 4}}, {2, {2, 4}}});
-    upper.placeReadyOperations();
+                          positions);
+    const auto tasks = upper.placeReadyOperations();
     rejects<std::invalid_argument>([&] { upper.reportArrival(mix, 99); },
                                    "unrelated droplet arrival was accepted");
+    positions[1] = tasks[0].target;
+    positions[2] = tasks[1].target;
     upper.reportArrival(mix, 1);
     upper.reportArrival(mix, 2);
     rejects<std::invalid_argument>([&] { upper.finishOperation(mix, {1}); },
@@ -153,6 +168,26 @@ void nearestTieUsesStableOrder() {
           "reserved module was selected again");
 }
 
+void occupiedLocationDelaysOperationStart() {
+    dmf::DynamicDag dag(mixThenDetect());
+    const auto start = dag.activateStart({1, 2});
+    const auto mix = dag.operationFor(start, "mix");
+    dmf::DropletPositions positions{{1, {0, 4}}, {2, {2, 4}}, {99, {4, 4}}};
+    dmf::UpperLayer upper(dag, dmf::VirtualChip(1, 1),
+                          {{dmf::OperationType::Mix, {3, 3}}}, positions);
+    const auto tasks = upper.placeReadyOperations();
+    positions[1] = tasks[0].target;
+    positions[2] = tasks[1].target;
+    check(!upper.reportArrival(mix, 1) && !upper.reportArrival(mix, 2) &&
+              upper.activeBlockages().empty(),
+          "operation started while another droplet occupied its module");
+    positions[99] = {8, 4};
+    const auto started = upper.tryStartPlacedOperations();
+    check(started.size() == 1 && started[0] == mix &&
+              upper.activeBlockages().size() == 1,
+          "operation did not start after the location became clear");
+}
+
 }  // namespace
 
 int main() {
@@ -162,6 +197,7 @@ int main() {
         sharedDropletIsReservedOnce();
         failedFeedbackKeepsPlacement();
         nearestTieUsesStableOrder();
+        occupiedLocationDelaysOperationStart();
         std::cout << "placement tests: passed\n";
     } catch (const std::exception& error) {
         std::cerr << "placement tests: " << error.what() << '\n';

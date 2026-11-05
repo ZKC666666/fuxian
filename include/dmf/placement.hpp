@@ -14,6 +14,7 @@ struct Point {
 };
 
 bool operator==(Point left, Point right);
+using DropletPositions = std::map<DropletId, Point>;
 
 struct ModuleProfile {
     int width;
@@ -34,6 +35,8 @@ public:
     VirtualChip(int columns, int rows, int module_side = 3);
 
     bool contains(Point point) const;
+    int width() const { return module_side_ * (2 * columns_ + 1); }
+    int height() const { return module_side_ * (2 * rows_ + 1); }
     int moduleSide() const { return module_side_; }
     std::optional<VirtualModule> nearestFree(
         const std::vector<Point>& input_positions, ModuleProfile profile) const;
