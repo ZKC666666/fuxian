@@ -4,6 +4,7 @@
 #include "dmf/upper_layer.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -289,6 +290,59 @@ void runEvacuationExample() {
               << positions.at(99).y << ")\n";
 }
 
+void runAsyncExample() {
+    using Clock = std::chrono::steady_clock;
+    dmf::DropletPositions positions{{1, {0, 60}}};
+    dmf::Router router(120, 120, positions);
+    router.addTasks({{1, 1, {119, 60}, 0}});
+    const dmf::VirtualModule blocker{1, {55, 55}, 11};
+    long long planning_microseconds = 0;
+    long long update_microseconds = 0;
+    int route_steps = 0;
+    int waiting_steps = 0;
+    bool announced_stale = false;
+    std::cout << "chip=120x120; droplet 1=(0,60) -> (119,60)\n";
+    for (int step = 1; router.hasTasks() && step <= 300; ++step) {
+        if (step == 10 || step == 40) {
+            const auto start = Clock::now();
+            router.setBlockages(step == 10 ?
+                                   std::vector<dmf::VirtualModule>{blocker} :
+                                   std::vector<dmf::VirtualModule>{});
+            update_microseconds += std::chrono::duration_cast<std::chrono::microseconds>(
+                                     Clock::now() - start).count();
+            std::cout << "step " << step << ": blockage "
+                      << (step == 10 ? "appeared" : "cleared")
+                      << "; background refresh requested\n";
+        }
+        const int swaps_before = router.asyncFieldSwaps();
+        const auto start = Clock::now();
+        const auto moves = router.planStep();
+        route_steps = step;
+        if (moves.at(0).from == moves.at(0).to) ++waiting_steps;
+        planning_microseconds += std::chrono::duration_cast<std::chrono::microseconds>(
+                                   Clock::now() - start).count();
+        if (router.asyncFieldSwaps() != swaps_before) {
+            std::cout << "step " << step << ": new cost field activated\n";
+        }
+        if (!announced_stale && router.staleFieldDecisions() > 0) {
+            std::cout << "step " << step
+                      << ": old field guides moves; latest blockage is checked\n";
+            announced_stale = true;
+        }
+        router.applyFeedback({{1, moves.at(0).to}});
+    }
+    if (router.hasTasks()) throw std::runtime_error("async demo exceeded 300 steps");
+    std::cout << "arrived at (" << positions.at(1).x << ',' << positions.at(1).y << ")\n"
+              << "cost fields built=" << router.costFieldBuilds()
+              << ", background swaps=" << router.asyncFieldSwaps()
+              << ", stale-field decisions=" << router.staleFieldDecisions() << '\n'
+              << "route steps=" << route_steps
+              << ", waiting steps=" << waiting_steps << '\n'
+              << "planning total (microseconds)=" << planning_microseconds
+              << ", blockage update total (microseconds)="
+              << update_microseconds << '\n';
+}
+
 struct TimedExample {
     dmf::Point second_start;
     int duration;
@@ -365,17 +419,18 @@ void runTimedExample(TimedExample example) {
 }  // namespace
 
 int main(int argc, char** argv) {
-    const std::string mode = argc == 1 ? "evacuation" : (argc == 2 ? argv[1] : "");
-    if (mode != "evacuation" && mode != "protocol" &&
+    const std::string mode = argc == 1 ? "async" : (argc == 2 ? argv[1] : "");
+    if (mode != "async" && mode != "evacuation" && mode != "protocol" &&
         mode != "protocol-output" && mode != "protocol-waste" &&
         mode != "detour" && mode != "timed" && mode != "router" &&
         mode != "placement" && mode != "output" && mode != "waste") {
-        std::cerr << "usage: am_dmf [evacuation|protocol|protocol-output|protocol-waste|"
+        std::cerr << "usage: am_dmf [async|evacuation|protocol|protocol-output|protocol-waste|"
                      "detour|timed|router|placement|output|waste]\n";
         return 2;
     }
     try {
-        if (mode == "evacuation") runEvacuationExample();
+        if (mode == "async") runAsyncExample();
+        else if (mode == "evacuation") runEvacuationExample();
         else if (mode == "protocol") {
             runProtocolExample("output");
             std::cout << '\n';

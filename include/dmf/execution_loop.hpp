@@ -29,6 +29,8 @@ struct StepReport {
     std::vector<OperationInstanceId> completed;
     std::size_t active_blockages = 0;
     int new_cost_fields = 0;
+    int async_field_swaps = 0;
+    int stale_field_decisions = 0;
     long long routing_microseconds = 0;
     long long blockage_update_microseconds = 0;
 };

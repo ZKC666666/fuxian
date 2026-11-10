@@ -76,6 +76,7 @@ void routingContinuesDuringOperation() {
     check(contains(fourth.completed, near) && !upper.hasPlacement(near),
           "operation did not release its module after three running steps");
     loop.step();  // The cleared blockage affects the next routing decision.
+    router.waitForCostFieldUpdates();
     check(router.costFieldBuilds() >= 2,
           "blockage change did not rebuild a routing cost field");
 

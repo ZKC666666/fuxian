@@ -1,9 +1,12 @@
 #pragma once
 
+#include "dmf/cost_field_updater.hpp"
 #include "dmf/routing_task.hpp"
 
 #include <array>
+#include <cstdint>
 #include <map>
+#include <memory>
 #include <optional>
 #include <tuple>
 #include <utility>
@@ -38,9 +41,12 @@ public:
     void setUpcomingBlockages(const std::vector<UpcomingBlockage>& modules);
     std::vector<MoveCommand> planStep();
     std::vector<RouteArrival> applyFeedback(const std::vector<MoveFeedback>& feedback);
+    void waitForCostFieldUpdates();  // Explicit barrier for reproducible experiments.
 
     bool hasTasks() const;
     int costFieldBuilds() const { return field_builds_; }
+    int asyncFieldSwaps() const { return async_field_swaps_; }
+    int staleFieldDecisions() const { return stale_field_decisions_; }
     const std::map<DropletId, Point>& evacuationTargets() const {
         return evacuation_targets_;
     }
@@ -74,12 +80,16 @@ private:
     std::vector<std::tuple<int, int, int, int, std::vector<DropletId>>>
         upcoming_signature_;
     std::map<std::pair<int, int>, std::vector<int>> fields_;
+    std::map<CostFieldKey, std::uint64_t> field_versions_;
+    std::shared_ptr<const CostFieldSnapshot> field_snapshot_;
+    CostFieldUpdater field_updater_;
     std::vector<MoveCommand> pending_;
     int field_builds_ = 0;
+    int async_field_swaps_ = 0;
+    int stale_field_decisions_ = 0;
 
     bool contains(Point point) const;
     int index(Point point) const;
-    Point pointAt(int index) const;
     std::array<Point, 4> neighbors(Point point) const;
     Occupancy occupancy() const;
     bool legal(Point candidate, DropletId droplet, const Occupancy& occupancy) const;
@@ -89,6 +99,8 @@ private:
     std::optional<Point> nearestExit(DropletId droplet, const Occupancy& occupied) const;
     void refreshEvacuations(const Occupancy& occupied);
     void discardUnusedFields(Point target);
+    void environmentChanged();
+    void installUpdatedField(CostFieldKey key, std::vector<int> field);
     int futureCost(Point candidate, DropletId droplet,
                    const Occupancy& occupancy, const std::vector<int>& field) const;
     const std::vector<int>& fieldFor(Point target, int allowed_module);

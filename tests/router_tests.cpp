@@ -66,6 +66,7 @@ void changedBlockageRebuildsOnlyWhenNeeded() {
 
     const dmf::VirtualModule blocker{1, {3, 3}, 3};
     router.setBlockages({blocker});
+    router.waitForCostFieldUpdates();
     int steps = 0;
     while (router.hasTasks() && steps++ < 24) {
         router.setBlockages({blocker});

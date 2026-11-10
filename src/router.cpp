@@ -22,6 +22,8 @@ Router::Router(int width, int height, DropletPositions& positions,
     }
     blocked_.assign(static_cast<std::size_t>(width_) * height_, 0);
     upcoming_region_.assign(blocked_.size(), 0);
+    field_snapshot_ = std::make_shared<CostFieldSnapshot>(
+        CostFieldSnapshot{width_, height_, 0, blocked_, upcoming_region_});
     auto occupied = occupancy();
     for (const auto& [droplet, point] : positions_) {
         if (droplet <= 0 || !contains(point) || !legal(point, droplet, occupied)) {
@@ -36,10 +38,6 @@ bool Router::contains(Point point) const {
 
 int Router::index(Point point) const {
     return point.y * width_ + point.x;
-}
-
-Point Router::pointAt(int cell) const {
-    return {cell % width_, cell / width_};
 }
 
 std::array<Point, 4> Router::neighbors(Point point) const {
@@ -162,31 +160,46 @@ int Router::futureCost(Point candidate, DropletId droplet,
 }
 
 const std::vector<int>& Router::fieldFor(Point target, int allowed_module) {
-    const auto target_cell = index(target);
-    const auto key = std::make_pair(target_cell, allowed_module);
+    const CostFieldKey key{index(target), allowed_module};
     const auto found = fields_.find(key);
-    if (found != fields_.end()) return found->second;
-
-    std::vector<int> field(blocked_.size(), unreachable);
-    std::queue<int> frontier;
-    if (!blocked_[target_cell] && !upcomingBlocks(target, allowed_module)) {
-        field[target_cell] = 0;
-        frontier.push(target_cell);
-    }
-    while (!frontier.empty()) {
-        const int cell = frontier.front();
-        frontier.pop();
-        for (const auto next : neighbors(pointAt(cell))) {
-            if (!contains(next)) continue;
-            const int next_cell = index(next);
-            if (blocked_[next_cell] || upcomingBlocks(next, allowed_module) ||
-                field[next_cell] != unreachable) continue;
-            field[next_cell] = field[cell] + 1;
-            frontier.push(next_cell);
+    if (found != fields_.end()) {
+        if (field_versions_.at(key) != field_snapshot_->version) {
+            auto updated = field_updater_.take(key, field_snapshot_->version);
+            if (updated) installUpdatedField(key, std::move(*updated));
+            else ++stale_field_decisions_;
         }
+        return found->second;
     }
+
+    auto field = CostFieldUpdater::build(key, *field_snapshot_);
     ++field_builds_;
+    field_versions_[key] = field_snapshot_->version;
     return fields_.emplace(key, std::move(field)).first->second;
+}
+
+void Router::installUpdatedField(CostFieldKey key, std::vector<int> field) {
+    fields_.at(key) = std::move(field);
+    field_versions_.at(key) = field_snapshot_->version;
+    ++field_builds_;
+    ++async_field_swaps_;
+}
+
+void Router::environmentChanged() {
+    field_snapshot_ = std::make_shared<CostFieldSnapshot>(CostFieldSnapshot{
+        width_, height_, field_snapshot_->version + 1, blocked_, upcoming_region_});
+    for (const auto& [key, field] : fields_) {
+        (void)field;
+        field_updater_.schedule(key, field_snapshot_);
+    }
+}
+
+void Router::waitForCostFieldUpdates() {
+    for (const auto& [key, field] : fields_) {
+        (void)field;
+        if (field_versions_.at(key) == field_snapshot_->version) continue;
+        auto updated = field_updater_.wait(key, field_snapshot_->version);
+        if (updated) installUpdatedField(key, std::move(*updated));
+    }
 }
 
 std::vector<RouteArrival> Router::addTasks(const std::vector<RoutingTask>& tasks) {
@@ -240,7 +253,7 @@ void Router::setBlockages(const std::vector<VirtualModule>& modules) {
     }
     blockage_signature_ = std::move(signature);
     blocked_ = std::move(next);
-    fields_.clear();
+    environmentChanged();
     evacuation_targets_.clear();
 }
 
@@ -290,7 +303,7 @@ void Router::setUpcomingBlockages(const std::vector<UpcomingBlockage>& modules) 
     upcoming_input_owners_ = std::move(owners);
     evacuation_targets_.clear();
     waiting_for_evacuation_.clear();
-    fields_.clear();
+    environmentChanged();
 }
 
 std::vector<MoveCommand> Router::planStep() {
@@ -374,8 +387,11 @@ void Router::discardUnusedFields(Point target) {
                      [&](const auto& entry) { return index(entry.second) == cell; });
     if (still_used) return;
     for (auto it = fields_.begin(); it != fields_.end();) {
-        if (it->first.first == cell) it = fields_.erase(it);
-        else ++it;
+        if (it->first.first == cell) {
+            field_versions_.erase(it->first);
+            field_updater_.cancel(it->first);
+            it = fields_.erase(it);
+        } else ++it;
     }
 }
 

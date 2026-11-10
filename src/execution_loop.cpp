@@ -56,6 +56,8 @@ StepReport ExecutionLoop::step() {
     StepReport report;
     report.step = ++step_count_;
     const int fields_before = router_.costFieldBuilds();
+    const int swaps_before = router_.asyncFieldSwaps();
+    const int stale_before = router_.staleFieldDecisions();
     report.activated_blocks = dag_.advanceCycle();
     const auto running_before = remaining_cycles_;
 
@@ -96,6 +98,8 @@ StepReport ExecutionLoop::step() {
     updateBlockages(report);
     report.active_blockages = upper_.activeBlockages().size();
     report.new_cost_fields = router_.costFieldBuilds() - fields_before;
+    report.async_field_swaps = router_.asyncFieldSwaps() - swaps_before;
+    report.stale_field_decisions = router_.staleFieldDecisions() - stale_before;
     return report;
 }
 

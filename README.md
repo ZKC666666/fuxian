@@ -2,7 +2,7 @@
 
 本工程依据论文 [A Two-Layer Decoupled Synthesis Framework for Uncertain Biochemical Protocols on Active-Matrix Digital Microfluidic Platforms](https://doi.org/10.1109/TCAD.2026.3721419) 逐步复现。论文给出了框架和伪代码，没有公开完整实现与实验生成程序。工程使用 C++17，文档使用中文。
 
-当前 `main` 分支处于 **v0.7：预告操作区域与液滴撤离**。每个正式版本都用 Git 标签保存；桌面的 `PROJECT/versions/版本号` 是可独立用 Visual Studio 打开的源码副本。此前可运行但简化较多的探索原型保存在 Git 标签 `v0.0-prototype`，不作为论文数值复现结果。
+当前 `main` 分支处于 **v0.8：异步代价场更新**。每个正式版本都用 Git 标签保存；桌面的 `PROJECT/versions/版本号` 是可独立用 Visual Studio 打开的源码副本。此前可运行但简化较多的探索原型保存在 Git 标签 `v0.0-prototype`，不作为论文数值复现结果。
 
 ## 先理解两个图
 
@@ -79,7 +79,7 @@ v0.3 在 `RoutingTask` 对应的目标与 `UpperLayer` 之间接入 `Router`。�
 - 在当前障碍布局下，每个目标执行一次 BFS；同一目标可复用。操作障碍区改变时才清除旧场，下次使用时重建。普通控制步无需重算整张芯片的场。完成的目标若不再有任务使用，缓存会释放。
 - 安全距离暂设为两滴液体的 Chebyshev 距离至少为 2，即水平、竖直和斜方向相邻都不允许。规划下一步时检查其他液滴的当前位置、上一时刻位置以及本步已规划位置。这是可配置的**工程假设**，不是论文公开的固定数值。
 - 迎面相遇时用两步前瞻比较候选动作，并在平局时让不同编号的液滴偏向不同侧绕行；立刻退回上一个电极会增加 3 的选择代价。这两个确定性选择是为了复现可检查的绕行行为，**不是论文给出的固定参数**。
-- 当前的 BFS 更新是按需同步执行；论文提出的后台并行更新与“旧场指导偏好、最新障碍硬过滤”仍待后续版本。当前示例只模拟电极位置和反馈，不生成真实驱动信号。
+- v0.3 的 BFS 更新是按需同步执行；v0.8 对已缓存目标在环境变化后的重算加入后台线程。新目标的第一次代价场仍同步生成，保证当步有路线可用。当前示例只模拟电极位置和反馈，不生成真实驱动信号。
 
 `Router` 的状态与操作完成仍分开：液滴真实到达会自动通知上层；Mix、Detect 的完成时刻和输出编号在示例中仍由程序报告。`cycle` 目前只是 dynamic DAG 的逻辑周期，不等于论文的物理执行周期。
 
@@ -150,7 +150,7 @@ v0.6 示例使用 **15×9** 阵列，初始液滴分别位于 `(1,2)`、`(1,6)`�
 
 `tests/protocol_execution_tests.cpp` 检查两条分支、操作依赖和分支时序、端口到达后才能启动、终点消耗液滴、安全距离，以及无效或缺失端口。此前版本的演示和测试保留。
 
-在 Visual Studio 里通过“文件 → 打开 → 文件夹”打开 `PROJECT/versions/v0.6`，在绿色运行按钮旁选择 **`am_dmf.exe`**，按 **Ctrl+F5** 即可看到两条分支的完整过程；无需打开“调试和启动设置”。在当前 v0.7 版本中，可使用 PowerShell 命令 `am_dmf.exe protocol` 运行相同演示。想只看一条分支，可运行 `am_dmf.exe protocol-output` 或 `am_dmf.exe protocol-waste`。选择 **`dmf_protocol_execution_tests.exe`** 并按 Ctrl+F5，会看到 `protocol execution tests: passed`。
+在 Visual Studio 里通过“文件 → 打开 → 文件夹”打开 `PROJECT/versions/v0.6`，在绿色运行按钮旁选择 **`am_dmf.exe`**，按 **Ctrl+F5** 即可看到两条分支的完整过程；无需打开“调试和启动设置”。在当前版本中，可使用 PowerShell 命令 `am_dmf.exe protocol` 运行相同演示。想只看一条分支，可运行 `am_dmf.exe protocol-output` 或 `am_dmf.exe protocol-waste`。选择 **`dmf_protocol_execution_tests.exe`** 并按 Ctrl+F5，会看到 `protocol execution tests: passed`。
 
 ## v0.7 新增：新操作区域启用前撤离无关液滴
 
@@ -167,6 +167,24 @@ v0.6 示例使用 **15×9** 阵列，初始液滴分别位于 `(1,2)`、`(1,6)`�
 
 **当前工程规则：**即将占用的区域对无关液滴立即视为禁入，撤离出口按最短可行步数选取；相同步数按固定邻居顺序决定。论文提到按预计占用时间提前预告，并允许液滴在启用前视情况穿过区域。本版采用较保守的禁入规则，尚未建立精确的未来占用时间窗口。移动失败仍由 v0.5 的实际位置反馈处理；若没有安全出口，系统报告等待，不强行启用障碍。新障碍未经预告、直接困住液滴的处理仍待后续实现。这里的演示位置和时长是工程假设，不是论文实验数据。
 
+## v0.8 新增：操作区域变化时异步更新代价场
+
+代价场记录每个电极到目标的最短剩余步数。v0.7 在障碍变化后的首次路由决策中同步重算整张场；v0.8 把**已有目标的重算**交给一个后台工作线程。Router 先拍下障碍和预告区域的不可变快照，再发出更新任务。后台完成前，旧代价场只用于判断哪个方向更有希望；每个候选位置仍必须通过**当前**障碍、预告区域和液滴安全距离检查。新场准备好后，Router 在控制步边界切换。连续变化时只保留每个目标最新版本，旧计算结果不会覆盖新结果。
+
+```text
+障碍变化 → 保存当前布局快照 → 后台计算新版代价场
+                 ↓                       ↓
+      当前障碍继续做安全检查       完成后按版本号安装
+                 ↓                       ↓
+            旧场暂时指导方向 → 下一控制步使用新场
+```
+
+默认 `am_dmf.exe` 演示使用 **120×120** 阵列，液滴从 `(0,60)` 运送到 `(119,60)`。第 10 步在 `x=55～65、y=55～65` 加入障碍，第 40 步移除。控制台会显示变化通知、旧场使用、新场启用、最终到达、总步数和等待步数。后台计算结束的具体步数受系统线程调度影响；运行时可能与示例截图不同。`am_dmf.exe evacuation` 保留 v0.7 的撤离演示。
+
+工程中的异步边界是**障碍变化后的重算**：首次遇到一个全新目标仍同步构建代价场；显式测试等待函数用于测试，不在正常控制循环中调用。若旧场把可行方向估成不可达，液滴可能暂等新场，故本版保证的是每步安全性，不声称所有可达任务必然完成。`cost fields built` 只计入已安装的场，不包括被丢弃的后台旧版本。
+
+`dmf_async_cost_field_tests.exe` 检查连续变化只接受最新版、旧场期间不进入新障碍、多个液滴共用目标，以及后台计算完成后的切换。`dmf_field_benchmark.exe` 对同一场景重复 10 次，分别统计“变化通知”和“变化后首次决策”的耗时中位数、总步数与等待步数；比较 v0.7 时需分别编译两个版本的 Release 程序。这个小场景只能检验局部开销与功能，不能替代论文的大规模实验或实时性上界证明。
+
 ## 编译与运行
 
 需要 C++17 编译器和 CMake。在已配置好编译器的终端中执行：
@@ -177,10 +195,11 @@ cmake --build build --config Debug
 ctest --test-dir build -C Debug --output-on-failure
 ```
 
-演示程序不填参数时运行 v0.7 的预告区域撤离演示；`protocol` 保留 v0.6 的两条完整协议演示，`detour` 保留 v0.5 的强制绕障演示，`timed` 保留 v0.4 的原演示，`router` 保留 v0.3 的逐步路由演示，`placement` 保留 v0.2 的手动到达演示；`output` 和 `waste` 保留 v0.1 的纯逻辑 CFG 分支演示。使用 Visual Studio 多配置生成器时，例如：
+演示程序不填参数时运行 v0.8 的异步代价场演示；`evacuation` 保留 v0.7 的撤离演示，`protocol` 保留 v0.6 的两条完整协议演示，`detour` 保留 v0.5 的强制绕障演示，`timed` 保留 v0.4 的原演示，`router` 保留 v0.3 的逐步路由演示，`placement` 保留 v0.2 的手动到达演示；`output` 和 `waste` 保留 v0.1 的纯逻辑 CFG 分支演示。使用 Visual Studio 多配置生成器时，例如：
 
 ```powershell
 .\build\Debug\am_dmf.exe
+.\build\Debug\am_dmf.exe evacuation
 .\build\Debug\am_dmf.exe protocol
 .\build\Debug\am_dmf.exe protocol-output
 .\build\Debug\am_dmf.exe protocol-waste
@@ -191,14 +210,16 @@ ctest --test-dir build -C Debug --output-on-failure
 .\build\Debug\am_dmf.exe output
 .\build\Debug\am_dmf.exe waste
 .\build\Debug\dmf_custom_route.exe
+.\build\Debug\dmf_async_cost_field_tests.exe
+.\build\Debug\dmf_field_benchmark.exe
 ```
 
-若使用单配置生成器，可执行文件通常位于构建目录下。在 Visual Studio 中通过“文件 → 打开 → 文件夹”打开 `PROJECT/versions/v0.7`，等待 CMake 配置完成。选择 `am_dmf.exe` 并按 Ctrl+F5，可观察液滴撤离后操作启动；选择 `dmf_evacuation_tests.exe` 可看到 `evacuation tests: passed`；选择 `dmf_custom_route.exe` 可继续运行自己编辑的 `examples/route_case.txt`。版本文件夹包含完整源码和 `CMakeLists.txt`，不依赖主工程的构建结果。
+若使用单配置生成器，可执行文件通常位于构建目录下。在 Visual Studio 中通过“文件 → 打开 → 文件夹”打开 `PROJECT/versions/v0.8`，等待 CMake 配置完成。选择绿色运行按钮旁的 `am_dmf.exe` 并按 Ctrl+F5，可观察旧场与新场切换；选择 `dmf_async_cost_field_tests.exe` 可看到 `async cost field tests: passed`；选择 `dmf_field_benchmark.exe` 可查看小场景计时。版本文件夹包含完整源码和 `CMakeLists.txt`，不依赖主工程的构建结果。
 
 ## 当前边界与后续步骤
 
-v0.6 已将 Mix、Detect、Output、Waste 贯穿到同一次仿真；v0.7 新增对**提前预告的操作区域**进行安全撤离。固定端口的位置、操作时长和撤离出口选择是工程假设。**还没有** Dispense、Split 的物理规则、异步代价场计算线程、未预告障碍困住液滴时的处理，也没有论文实验所用的大规模基准和对照结果。当前实现不生成真实电极驱动序列。
+v0.6 已将 Mix、Detect、Output、Waste 贯穿到同一次仿真；v0.7 新增对**提前预告的操作区域**进行安全撤离；v0.8 对已有目标在障碍变化后的代价场重算使用单个后台线程。固定端口的位置、操作时长和撤离出口选择是工程假设。**还没有** Dispense、Split 的物理规则、未预告障碍困住液滴时的处理，也没有论文实验所用的大规模基准和对照结果。当前实现不生成真实电极驱动序列。
 
 论文没有精确规定所有周期内事件的先后边界。当前固定为“本步完成的操作，其输出液滴和检测分支从下一步开始可用”；这是工程假设。`ExecutionLoop` 默认使用理想移动反馈，v0.5 允许注入失败或成功的位置反馈，但尚未接硬件反馈入口。
 
-下一步计划完善异步代价场更新，再处理其余操作类型及基准对照；PIBT 改进在原论文版本稳定后单独开展。每个完成版本都同时保存 GitHub 标签和 `PROJECT/versions/版本号` 的源码副本。
+下一步计划按论文补充其余操作类型和实验基准，再决定未预告障碍的处理规则；PIBT 改进在原论文版本稳定后单独开展。每个完成版本都同时保存 GitHub 标签和 `PROJECT/versions/版本号` 的源码副本。
