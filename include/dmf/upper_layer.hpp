@@ -27,6 +27,7 @@ public:
     int durationFor(OperationInstanceId operation) const;
     const VirtualModule& moduleFor(OperationInstanceId operation) const;
     std::vector<VirtualModule> activeBlockages() const;
+    std::vector<UpcomingBlockage> upcomingBlockages() const;
     Point positionOf(DropletId droplet) const;
 
 private:

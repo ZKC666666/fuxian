@@ -22,6 +22,9 @@ struct StepReport {
     std::vector<RoutingTask> routing_tasks;
     std::vector<MoveCommand> moves;
     std::vector<MoveFeedback> observed;
+    std::map<DropletId, Point> evacuation_targets;
+    std::vector<DropletId> evacuated;
+    std::vector<DropletId> waiting_for_evacuation;
     std::vector<OperationInstanceId> started;
     std::vector<OperationInstanceId> completed;
     std::size_t active_blockages = 0;

@@ -178,6 +178,17 @@ std::vector<VirtualModule> UpperLayer::activeBlockages() const {
     return blockages;
 }
 
+std::vector<UpcomingBlockage> UpperLayer::upcomingBlockages() const {
+    std::vector<UpcomingBlockage> upcoming;
+    for (const auto& [operation, placement] : placements_) {
+        (void)operation;
+        if (!placement.running && placement.module) {
+            upcoming.push_back({*placement.module, placement.inputs});
+        }
+    }
+    return upcoming;
+}
+
 Point UpperLayer::positionOf(DropletId droplet) const {
     return positions_.at(droplet);
 }

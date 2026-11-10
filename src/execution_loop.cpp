@@ -48,6 +48,7 @@ void ExecutionLoop::acceptStarts(const std::vector<OperationInstanceId>& started
 void ExecutionLoop::updateBlockages(StepReport& report) {
     const auto start = Clock::now();
     router_.setBlockages(upper_.activeBlockages());
+    router_.setUpcomingBlockages(upper_.upcomingBlockages());
     report.blockage_update_microseconds += elapsedMicroseconds(start);
 }
 
@@ -67,6 +68,8 @@ StepReport ExecutionLoop::step() {
         const auto routing_start = Clock::now();
         report.moves = router_.planStep();
         report.routing_microseconds = elapsedMicroseconds(routing_start);
+        report.evacuation_targets = router_.evacuationTargets();
+        report.waiting_for_evacuation = router_.waitingForEvacuation();
         report.observed.reserve(report.moves.size());
         for (const auto& move : report.moves) {
             const auto position = movement_provider_
@@ -75,6 +78,7 @@ StepReport ExecutionLoop::step() {
             report.observed.push_back({move.droplet, position});
         }
         acceptArrivals(router_.applyFeedback(report.observed), report);
+        report.evacuated = router_.evacuatedLastStep();
         acceptStarts(upper_.tryStartPlacedOperations(), report);
     }
 
@@ -104,6 +108,7 @@ void ExecutionLoop::completeEarly(OperationInstanceId operation,
                            std::move(feedback.outcome));
     remaining_cycles_.erase(operation);
     router_.setBlockages(upper_.activeBlockages());
+    router_.setUpcomingBlockages(upper_.upcomingBlockages());
 }
 
 bool ExecutionLoop::allDone() const {

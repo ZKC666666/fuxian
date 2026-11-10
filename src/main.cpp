@@ -3,6 +3,7 @@
 #include "dmf/router.hpp"
 #include "dmf/upper_layer.hpp"
 
+#include <algorithm>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -237,6 +238,57 @@ dmf::Protocol timedProtocol() {
     return {"start", {{"start", std::move(block)}}};
 }
 
+void runEvacuationExample() {
+    using dmf::OperationType;
+    dmf::BlockSpec block{
+        "start", 1,
+        {{"detect", OperationType::Detect, {dmf::InputRef::entry(0)}, 1}},
+        std::nullopt};
+    dmf::DynamicDag dag({"start", {{"start", std::move(block)}}});
+    const auto start = dag.activateStart({1});
+    const auto detect = dag.operationFor(start, "detect");
+    dmf::DropletPositions positions{{1, {4, 3}}, {99, {4, 5}}};
+    dmf::VirtualChip chip(1, 1);
+    dmf::UpperLayer upper(dag, chip,
+                          {{OperationType::Detect, {3, 3, 2}}}, positions);
+    dmf::Router router(chip.width(), chip.height(), positions);
+    dmf::ExecutionLoop loop(
+        dag, upper, router,
+        [](int) { return dmf::CompletionFeedback{{2}, std::nullopt}; });
+
+    std::cout << "chip=9x9; Detect input 1=(4,3); unrelated droplet 99=(4,5)\n"
+              << "reserved module x=3..5, y=3..5\n";
+    for (int steps = 0; !loop.allDone() && steps < 30; ++steps) {
+        const auto report = loop.step();
+        std::cout << "step " << report.step << ": ";
+        for (const auto& [droplet, target] : report.evacuation_targets) {
+            std::cout << "evacuate " << droplet << " toward ("
+                      << target.x << ',' << target.y << "); ";
+        }
+        for (const auto& move : report.moves) {
+            if (!(move.from == move.to)) {
+                std::cout << "move " << move.droplet << " to ("
+                          << move.to.x << ',' << move.to.y << "); ";
+            }
+        }
+        for (const auto droplet : report.evacuated) {
+            std::cout << "droplet " << droplet << " cleared module; ";
+        }
+        for (const auto droplet : report.waiting_for_evacuation) {
+            std::cout << "droplet " << droplet << " waiting for safe exit; ";
+        }
+        if (std::find(report.started.begin(), report.started.end(), detect) !=
+            report.started.end()) std::cout << "start Detect; ";
+        if (std::find(report.completed.begin(), report.completed.end(), detect) !=
+            report.completed.end()) std::cout << "finish Detect; ";
+        std::cout << "blockages=" << report.active_blockages << '\n';
+    }
+    if (!loop.allDone()) throw std::runtime_error("evacuation demo exceeded 30 steps");
+    std::cout << "completed=" << std::boolalpha << loop.allDone()
+              << ", droplet 99=(" << positions.at(99).x << ','
+              << positions.at(99).y << ")\n";
+}
+
 struct TimedExample {
     dmf::Point second_start;
     int duration;
@@ -313,16 +365,18 @@ void runTimedExample(TimedExample example) {
 }  // namespace
 
 int main(int argc, char** argv) {
-    const std::string mode = argc == 1 ? "protocol" : (argc == 2 ? argv[1] : "");
-    if (mode != "protocol" && mode != "protocol-output" && mode != "protocol-waste" &&
+    const std::string mode = argc == 1 ? "evacuation" : (argc == 2 ? argv[1] : "");
+    if (mode != "evacuation" && mode != "protocol" &&
+        mode != "protocol-output" && mode != "protocol-waste" &&
         mode != "detour" && mode != "timed" && mode != "router" &&
         mode != "placement" && mode != "output" && mode != "waste") {
-        std::cerr << "usage: am_dmf [protocol|protocol-output|protocol-waste|"
+        std::cerr << "usage: am_dmf [evacuation|protocol|protocol-output|protocol-waste|"
                      "detour|timed|router|placement|output|waste]\n";
         return 2;
     }
     try {
-        if (mode == "protocol") {
+        if (mode == "evacuation") runEvacuationExample();
+        else if (mode == "protocol") {
             runProtocolExample("output");
             std::cout << '\n';
             runProtocolExample("waste");
