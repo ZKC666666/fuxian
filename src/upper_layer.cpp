@@ -7,9 +7,10 @@ namespace dmf {
 
 UpperLayer::UpperLayer(DynamicDag& dag, VirtualChip chip,
                        std::map<OperationType, ModuleProfile> profiles,
-                       DropletPositions& positions)
+                       DropletPositions& positions,
+                       std::map<OperationType, Point> terminal_ports)
     : dag_(dag), chip_(std::move(chip)), profiles_(std::move(profiles)),
-      positions_(positions) {
+      terminal_ports_(std::move(terminal_ports)), positions_(positions) {
     for (const auto& [type, profile] : profiles_) {
         if ((type != OperationType::Mix && type != OperationType::Detect) ||
             profile.width <= 0 || profile.height <= 0 ||
@@ -23,6 +24,19 @@ UpperLayer::UpperLayer(DynamicDag& dag, VirtualChip chip,
         if (droplet <= 0 || !chip_.contains(position)) {
             throw std::invalid_argument("invalid initial droplet position");
         }
+    }
+    for (const auto& [type, port] : terminal_ports_) {
+        if ((type != OperationType::Output && type != OperationType::Waste) ||
+            !chip_.contains(port) ||
+            (port.x != 0 && port.x != chip_.width() - 1 &&
+             port.y != 0 && port.y != chip_.height() - 1)) {
+            throw std::invalid_argument("invalid terminal port");
+        }
+    }
+    if (terminal_ports_.count(OperationType::Output) != 0 &&
+        terminal_ports_.count(OperationType::Waste) != 0 &&
+        terminal_ports_.at(OperationType::Output) == terminal_ports_.at(OperationType::Waste)) {
+        throw std::invalid_argument("output and waste ports must differ");
     }
 }
 
@@ -40,10 +54,28 @@ std::vector<Point> UpperLayer::targetsFor(OperationType type,
 std::vector<RoutingTask> UpperLayer::placeReadyOperations() {
     std::vector<RoutingTask> tasks;
     for (const auto operation : dag_.readyOperations()) {
-        const auto profile = profiles_.find(dag_.operationType(operation));
-        if (profile == profiles_.end()) continue;
+        const auto type = dag_.operationType(operation);
         const auto inputs = dag_.inputsIfReady(operation);
         if (!inputs) continue;  // An earlier placement may have reserved a shared droplet.
+
+        if (type == OperationType::Output || type == OperationType::Waste) {
+            const auto port = terminal_ports_.find(type);
+            if (port == terminal_ports_.end()) {
+                throw std::logic_error("terminal operation has no configured port");
+            }
+            if (inputs->size() != 1) {
+                throw std::invalid_argument("terminal operation requires one input droplet");
+            }
+            dag_.reserveOperation(operation);
+            Placement placement{std::nullopt, *inputs, {}, {}, false};
+            placement.targets.emplace(inputs->front(), port->second);
+            placements_.emplace(operation, std::move(placement));
+            tasks.push_back({operation, inputs->front(), port->second, 0});
+            continue;
+        }
+
+        const auto profile = profiles_.find(type);
+        if (profile == profiles_.end()) continue;
 
         std::vector<Point> positions;
         for (const auto droplet : *inputs) positions.push_back(positions_.at(droplet));
@@ -79,14 +111,16 @@ bool UpperLayer::reportArrival(OperationInstanceId operation, DropletId droplet)
 
 bool UpperLayer::tryStart(Placement& placement, OperationInstanceId operation) {
     if (placement.running || placement.arrived.size() != placement.inputs.size()) return false;
-    const auto& module = placement.module;
-    for (const auto& [droplet, position] : positions_) {
-        if (placement.targets.count(droplet) != 0) continue;
-        if (position.x >= module.top_left.x &&
-            position.x < module.top_left.x + module.side &&
-            position.y >= module.top_left.y &&
-            position.y < module.top_left.y + module.side) {
-            return false;
+    if (placement.module) {
+        const auto& module = *placement.module;
+        for (const auto& [droplet, position] : positions_) {
+            if (placement.targets.count(droplet) != 0) continue;
+            if (position.x >= module.top_left.x &&
+                position.x < module.top_left.x + module.side &&
+                position.y >= module.top_left.y &&
+                position.y < module.top_left.y + module.side) {
+                return false;
+            }
         }
     }
     dag_.startOperation(operation);
@@ -107,10 +141,15 @@ void UpperLayer::finishOperation(OperationInstanceId operation,
                                   std::optional<std::string> outcome) {
     auto& placement = placements_.at(operation);
     if (!placement.running) throw std::logic_error("operation has not started");
+    if (!placement.module && !outputs.empty()) {
+        throw std::invalid_argument("terminal operation cannot produce a droplet");
+    }
     dag_.finishOperation(operation, outputs, std::move(outcome));
     for (const auto droplet : placement.inputs) positions_.erase(droplet);
-    for (const auto droplet : outputs) positions_[droplet] = placement.module.center();
-    chip_.release(placement.module.id, operation);
+    if (placement.module) {
+        for (const auto droplet : outputs) positions_[droplet] = placement.module->center();
+        chip_.release(placement.module->id, operation);
+    }
     placements_.erase(operation);
 }
 
@@ -119,18 +158,22 @@ bool UpperLayer::hasPlacement(OperationInstanceId operation) const {
 }
 
 int UpperLayer::durationFor(OperationInstanceId operation) const {
-    return profiles_.at(dag_.operationType(operation)).duration_cycles;
+    const auto type = dag_.operationType(operation);
+    if (type == OperationType::Output || type == OperationType::Waste) return 1;
+    return profiles_.at(type).duration_cycles;
 }
 
 const VirtualModule& UpperLayer::moduleFor(OperationInstanceId operation) const {
-    return placements_.at(operation).module;
+    const auto& module = placements_.at(operation).module;
+    if (!module) throw std::logic_error("terminal operation has no module");
+    return *module;
 }
 
 std::vector<VirtualModule> UpperLayer::activeBlockages() const {
     std::vector<VirtualModule> blockages;
     for (const auto& [operation, placement] : placements_) {
         (void)operation;
-        if (placement.running) blockages.push_back(placement.module);
+        if (placement.running && placement.module) blockages.push_back(*placement.module);
     }
     return blockages;
 }

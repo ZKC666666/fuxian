@@ -29,8 +29,12 @@ target_link_libraries(dmf_router_tests PRIVATE dmf_core)
 add_executable(dmf_execution_tests tests/execution_tests.cpp)
 target_link_libraries(dmf_execution_tests PRIVATE dmf_core)
 
+add_executable(dmf_protocol_execution_tests tests/protocol_execution_tests.cpp)
+target_link_libraries(dmf_protocol_execution_tests PRIVATE dmf_core)
+
 foreach(target dmf_core am_dmf dmf_custom_route dmf_runtime_tests
-               dmf_placement_tests dmf_router_tests dmf_execution_tests)
+               dmf_placement_tests dmf_router_tests dmf_execution_tests
+               dmf_protocol_execution_tests)
   if(MSVC)
     target_compile_options(${target} PRIVATE /W4 /permissive- /EHsc)
   else()
@@ -43,6 +47,8 @@ add_test(NAME runtime_tests COMMAND dmf_runtime_tests)
 add_test(NAME placement_tests COMMAND dmf_placement_tests)
 add_test(NAME router_tests COMMAND dmf_router_tests)
 add_test(NAME execution_tests COMMAND dmf_execution_tests)
+add_test(NAME protocol_execution_tests COMMAND dmf_protocol_execution_tests)
+add_test(NAME protocol_demo COMMAND am_dmf)
 add_test(NAME placement_demo COMMAND am_dmf placement)
 add_test(NAME router_demo COMMAND am_dmf router)
 add_test(NAME timed_demo COMMAND am_dmf timed)

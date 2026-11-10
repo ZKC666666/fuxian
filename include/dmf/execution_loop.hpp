@@ -18,6 +18,8 @@ struct CompletionFeedback {
 
 struct StepReport {
     int step = 0;
+    std::vector<BlockInstanceId> activated_blocks;
+    std::vector<RoutingTask> routing_tasks;
     std::vector<MoveCommand> moves;
     std::vector<MoveFeedback> observed;
     std::vector<OperationInstanceId> started;

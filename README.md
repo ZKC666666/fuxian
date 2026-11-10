@@ -2,7 +2,7 @@
 
 本工程依据论文 [A Two-Layer Decoupled Synthesis Framework for Uncertain Biochemical Protocols on Active-Matrix Digital Microfluidic Platforms](https://doi.org/10.1109/TCAD.2026.3721419) 逐步复现。论文给出了框架和伪代码，没有公开完整实现与实验生成程序。工程使用 C++17，文档使用中文。
 
-当前 `main` 分支处于 **v0.5：移动反馈与强制绕障演示**。每个正式版本都用 Git 标签保存；桌面的 `PROJECT/versions/版本号` 是可独立用 Visual Studio 打开的源码副本。此前可运行但简化较多的探索原型保存在 Git 标签 `v0.0-prototype`，不作为论文数值复现结果。
+当前 `main` 分支处于 **v0.6：完整分支协议仿真**。每个正式版本都用 Git 标签保存；桌面的 `PROJECT/versions/版本号` 是可独立用 Visual Studio 打开的源码副本。此前可运行但简化较多的探索原型保存在 Git 标签 `v0.0-prototype`，不作为论文数值复现结果。
 
 ## 先理解两个图
 
@@ -134,6 +134,24 @@ v0.4 的控制循环总假设液滴按命令成功移动。现在可向 `Executi
 
 此反馈入口用于模拟电极位置观测，尚未连接真实传感器。微秒计时仍仅统计 Router 规划动作，不含反馈函数和控制台输出。
 
+## v0.6 新增：一条协议从输入跑到输出或废液口
+
+之前动态 DAG 的分支演示和双层控制循环分别运行。这一版让同一条协议在一个控制循环里完成：
+
+```text
+输入液滴 1、2 → Mix → 新液滴 3 → Detect → 新液滴 4
+                                           ├─ 检测结果为 output → 送到输出口
+                                           └─ 检测结果为 waste  → 送到废液口
+```
+
+上层仍为 Mix、Detect 选择虚拟模块，等输入液滴到齐后启动并形成 blockage。对于 Output、Waste，上层读取预设的阵列边缘端口，生成普通 `RoutingTask`；Router 使用同一套逐步移动与到达反馈。端口不占用虚拟模块，也不形成操作区域障碍。到达端口后，终点操作在下一控制步完成并消耗该液滴。检测结果由仿真反馈提供，选中的流程块在检测完成后的下一步才加入动态 DAG；另一条分支不执行。
+
+默认示例使用 **15×9** 阵列，初始液滴分别位于 `(1,2)`、`(1,6)`，输出口为 `(14,4)`，废液口为 `(0,8)`。Mix 用时 3 个运行控制步，Detect 用时 2 个运行控制步，终点操作用时 1 个运行控制步。这些位置和时长是演示事件衔接的**工程假设**，并非论文实验参数。默认程序连续展示 output 和 waste 两次独立仿真；每行显示本步新激活的分支、运送目标、液滴移动、操作启动与完成、活动 blockage 数量。示例结果分别在第 23 步和第 21 步结束，最终活动液滴数均为 0。具体完成步数依本工程的路由规则和演示参数而定，不是论文实验结果。
+
+`tests/protocol_execution_tests.cpp` 检查两条分支、操作依赖和分支时序、端口到达后才能启动、终点消耗液滴、安全距离，以及无效或缺失端口。此前版本的演示和测试保留。
+
+在 Visual Studio 里通过“文件 → 打开 → 文件夹”打开 `PROJECT/versions/v0.6`，在绿色运行按钮旁选择 **`am_dmf.exe`**，按 **Ctrl+F5** 即可看到两条分支的完整过程；无需打开“调试和启动设置”。想只看一条分支，可在 PowerShell 中运行 `am_dmf.exe protocol-output` 或 `am_dmf.exe protocol-waste`。选择 **`dmf_protocol_execution_tests.exe`** 并按 Ctrl+F5，会看到 `protocol execution tests: passed`。
+
 ## 编译与运行
 
 需要 C++17 编译器和 CMake。在已配置好编译器的终端中执行：
@@ -144,10 +162,12 @@ cmake --build build --config Debug
 ctest --test-dir build -C Debug --output-on-failure
 ```
 
-演示程序不填参数时运行 v0.5 的强制绕障与失败反馈演示；`timed` 保留 v0.4 的原演示，`router` 保留 v0.3 的逐步路由演示，`placement` 保留 v0.2 的手动到达演示；`output` 和 `waste` 保留 v0.1 的 CFG 分支演示。使用 Visual Studio 多配置生成器时，例如：
+演示程序不填参数时运行 v0.6 的 output 与 waste 两条完整协议；`detour` 保留 v0.5 的强制绕障演示，`timed` 保留 v0.4 的原演示，`router` 保留 v0.3 的逐步路由演示，`placement` 保留 v0.2 的手动到达演示；`output` 和 `waste` 保留 v0.1 的纯逻辑 CFG 分支演示。使用 Visual Studio 多配置生成器时，例如：
 
 ```powershell
 .\build\Debug\am_dmf.exe
+.\build\Debug\am_dmf.exe protocol-output
+.\build\Debug\am_dmf.exe protocol-waste
 .\build\Debug\am_dmf.exe detour
 .\build\Debug\am_dmf.exe timed
 .\build\Debug\am_dmf.exe router
@@ -157,12 +177,12 @@ ctest --test-dir build -C Debug --output-on-failure
 .\build\Debug\dmf_custom_route.exe
 ```
 
-若使用单配置生成器，可执行文件通常位于构建目录下。在 Visual Studio 中通过“文件 → 打开 → 文件夹”打开 `PROJECT/versions/v0.5`，等待 CMake 配置完成。选择 `am_dmf.exe` 并按 Ctrl+F5，可观察强制绕障与移动失败演示；选择 `dmf_custom_route.exe` 可继续运行自己编辑的 `examples/route_case.txt`。版本文件夹包含完整源码和 `CMakeLists.txt`，不依赖主工程的构建结果。
+若使用单配置生成器，可执行文件通常位于构建目录下。在 Visual Studio 中通过“文件 → 打开 → 文件夹”打开 `PROJECT/versions/v0.6`，等待 CMake 配置完成。选择 `am_dmf.exe` 并按 Ctrl+F5，可观察两条完整分支；选择 `dmf_custom_route.exe` 可继续运行自己编辑的 `examples/route_case.txt`。版本文件夹包含完整源码和 `CMakeLists.txt`，不依赖主工程的构建结果。
 
 ## 当前边界与后续步骤
 
-v0.5 已用强制绕障和失败反馈检验双层控制循环。当前只有 Mix、Detect 进入物理选址与路由；**还没有**真实电极驱动序列、异步代价场计算线程、在新障碍内被困液滴的撤离策略，也没有论文实验所用的执行周期统计。`Output`、`Waste` 仍只有逻辑演示，没有物理端口模型。
+v0.6 已将 Mix、Detect、Output、Waste 贯穿到同一次仿真；固定端口的位置和终点操作时长是工程假设。**还没有** Dispense、Split 的物理规则、异步代价场计算线程、在新障碍内被困液滴的撤离策略，也没有论文实验所用的大规模基准和对照结果。当前实现不生成真实电极驱动序列。
 
 论文没有精确规定所有周期内事件的先后边界。当前固定为“本步完成的操作，其输出液滴和检测分支从下一步开始可用”；这是工程假设。`ExecutionLoop` 默认使用理想移动反馈，v0.5 允许注入失败或成功的位置反馈，但尚未接硬件反馈入口。
 
-下一步可完善端口、更多操作类型及异步代价场更新，再构造基准和对照方法；PIBT 改进在原论文版本稳定后单独开展。每个完成版本都同时保存 GitHub 标签和 `PROJECT/versions/版本号` 的源码副本。
+下一步计划处理新操作区域启用前的液滴撤离，再完善异步代价场更新、其余操作类型及基准对照；PIBT 改进在原论文版本稳定后单独开展。每个完成版本都同时保存 GitHub 标签和 `PROJECT/versions/版本号` 的源码副本。

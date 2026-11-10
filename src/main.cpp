@@ -59,6 +59,67 @@ void runExample(const std::string& outcome) {
     std::cout << "all operations completed: " << std::boolalpha << dag.allDone() << '\n';
 }
 
+void runProtocolExample(const std::string& outcome) {
+    using dmf::OperationType;
+    dmf::DynamicDag dag(exampleProtocol());
+    dag.activateStart({1, 2});
+    dmf::DropletPositions positions{{1, {1, 2}}, {2, {1, 6}}};
+    dmf::VirtualChip chip(2, 1);
+    dmf::UpperLayer upper(
+        dag, chip,
+        {{OperationType::Mix, {3, 3, 3}}, {OperationType::Detect, {3, 3, 2}}},
+        positions,
+        {{OperationType::Output, {chip.width() - 1, 4}},
+         {OperationType::Waste, {0, chip.height() - 1}}});
+    dmf::Router router(chip.width(), chip.height(), positions);
+    dmf::ExecutionLoop loop(
+        dag, upper, router,
+        [&dag, &outcome](dmf::OperationInstanceId operation) {
+            switch (dag.operationType(operation)) {
+                case OperationType::Mix: return dmf::CompletionFeedback{{3}, std::nullopt};
+                case OperationType::Detect: return dmf::CompletionFeedback{{4}, outcome};
+                case OperationType::Output:
+                case OperationType::Waste: return dmf::CompletionFeedback{{}, std::nullopt};
+                default: throw std::logic_error("unsupported operation in protocol demo");
+            }
+        });
+
+    std::cout << "protocol branch=" << outcome << ", chip=" << chip.width()
+              << 'x' << chip.height() << '\n';
+    int steps = 0;
+    while (!loop.allDone() && steps++ < 100) {
+        const auto report = loop.step();
+        std::cout << "step " << report.step << ": ";
+        for (const auto block : report.activated_blocks) {
+            std::cout << "activate " << dag.blockName(block) << " block; ";
+        }
+        for (const auto& task : report.routing_tasks) {
+            std::cout << "route " << dag.operation(task.operation).spec_id
+                      << " droplet " << task.droplet << " to ("
+                      << task.target.x << ',' << task.target.y << "); ";
+        }
+        for (std::size_t index = 0; index < report.moves.size(); ++index) {
+            const auto& move = report.moves[index];
+            if (!(move.from == report.observed[index].observed)) {
+                std::cout << "move " << move.droplet << " to ("
+                          << move.to.x << ',' << move.to.y << "); ";
+            }
+        }
+        for (const auto operation : report.started) {
+            std::cout << "start " << dag.operation(operation).spec_id << "; ";
+        }
+        for (const auto operation : report.completed) {
+            std::cout << "finish " << dag.operation(operation).spec_id << "; ";
+        }
+        std::cout << "blockages=" << report.active_blockages << '\n';
+    }
+    if (!loop.allDone()) throw std::runtime_error("protocol demo exceeded 100 steps");
+    std::cout << "completed=" << std::boolalpha << loop.allDone()
+              << ", active droplets=" << positions.size()
+              << ", blocks=" << dag.blockCount()
+              << ", operations=" << dag.operationCount() << "\n";
+}
+
 dmf::Protocol placementProtocol() {
     using dmf::InputRef;
     using dmf::OperationType;
@@ -252,14 +313,22 @@ void runTimedExample(TimedExample example) {
 }  // namespace
 
 int main(int argc, char** argv) {
-    const std::string mode = argc == 1 ? "detour" : (argc == 2 ? argv[1] : "");
-    if (mode != "detour" && mode != "timed" && mode != "router" && mode != "placement" &&
-        mode != "output" && mode != "waste") {
-        std::cerr << "usage: am_dmf [detour|timed|router|placement|output|waste]\n";
+    const std::string mode = argc == 1 ? "protocol" : (argc == 2 ? argv[1] : "");
+    if (mode != "protocol" && mode != "protocol-output" && mode != "protocol-waste" &&
+        mode != "detour" && mode != "timed" && mode != "router" &&
+        mode != "placement" && mode != "output" && mode != "waste") {
+        std::cerr << "usage: am_dmf [protocol|protocol-output|protocol-waste|"
+                     "detour|timed|router|placement|output|waste]\n";
         return 2;
     }
     try {
-        if (mode == "detour") runTimedExample({{0, 4}, 20, 2});
+        if (mode == "protocol") {
+            runProtocolExample("output");
+            std::cout << '\n';
+            runProtocolExample("waste");
+        } else if (mode == "protocol-output") runProtocolExample("output");
+        else if (mode == "protocol-waste") runProtocolExample("waste");
+        else if (mode == "detour") runTimedExample({{0, 4}, 20, 2});
         else if (mode == "timed") runTimedExample({{0, 7}, 3, 0});
         else if (mode == "router") runRouterExample();
         else if (mode == "placement") runPlacementExample();

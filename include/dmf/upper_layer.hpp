@@ -14,7 +14,8 @@ class UpperLayer {
 public:
     UpperLayer(DynamicDag& dag, VirtualChip chip,
                std::map<OperationType, ModuleProfile> profiles,
-               DropletPositions& positions);
+               DropletPositions& positions,
+               std::map<OperationType, Point> terminal_ports = {});
 
     std::vector<RoutingTask> placeReadyOperations();
     bool reportArrival(OperationInstanceId operation, DropletId droplet);
@@ -30,7 +31,7 @@ public:
 
 private:
     struct Placement {
-        VirtualModule module;
+        std::optional<VirtualModule> module;
         std::vector<DropletId> inputs;
         std::map<DropletId, Point> targets;
         std::set<DropletId> arrived;
@@ -40,6 +41,7 @@ private:
     DynamicDag& dag_;
     VirtualChip chip_;
     std::map<OperationType, ModuleProfile> profiles_;
+    std::map<OperationType, Point> terminal_ports_;
     DropletPositions& positions_;
     std::map<OperationInstanceId, Placement> placements_;
 

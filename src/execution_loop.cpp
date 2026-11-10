@@ -55,10 +55,11 @@ StepReport ExecutionLoop::step() {
     StepReport report;
     report.step = ++step_count_;
     const int fields_before = router_.costFieldBuilds();
-    dag_.advanceCycle();  // Outputs and branches from earlier steps become available.
+    report.activated_blocks = dag_.advanceCycle();
     const auto running_before = remaining_cycles_;
 
-    acceptArrivals(router_.addTasks(upper_.placeReadyOperations()), report);
+    report.routing_tasks = upper_.placeReadyOperations();
+    acceptArrivals(router_.addTasks(report.routing_tasks), report);
     acceptStarts(upper_.tryStartPlacedOperations(), report);
     updateBlockages(report);
 
