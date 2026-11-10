@@ -95,7 +95,8 @@ std::vector<RoutingTask> UpperLayer::placeReadyOperations() {
     return tasks;
 }
 
-bool UpperLayer::reportArrival(OperationInstanceId operation, DropletId droplet) {
+bool UpperLayer::reportArrival(OperationInstanceId operation, DropletId droplet,
+                               const std::set<int>& held_modules) {
     auto& placement = placements_.at(operation);
     if (placement.running) throw std::logic_error("operation is already running");
     const auto target = placement.targets.find(droplet);
@@ -106,13 +107,15 @@ bool UpperLayer::reportArrival(OperationInstanceId operation, DropletId droplet)
         throw std::logic_error("droplet has not reached its routing target");
     }
     placement.arrived.insert(droplet);
-    return tryStart(placement, operation);
+    return tryStart(placement, operation, held_modules);
 }
 
-bool UpperLayer::tryStart(Placement& placement, OperationInstanceId operation) {
+bool UpperLayer::tryStart(Placement& placement, OperationInstanceId operation,
+                          const std::set<int>& held_modules) {
     if (placement.running || placement.arrived.size() != placement.inputs.size()) return false;
     if (placement.module) {
         const auto& module = *placement.module;
+        if (held_modules.count(module.id) != 0) return false;
         for (const auto& [droplet, position] : positions_) {
             if (placement.targets.count(droplet) != 0) continue;
             if (position.x >= module.top_left.x &&
@@ -128,10 +131,11 @@ bool UpperLayer::tryStart(Placement& placement, OperationInstanceId operation) {
     return true;
 }
 
-std::vector<OperationInstanceId> UpperLayer::tryStartPlacedOperations() {
+std::vector<OperationInstanceId> UpperLayer::tryStartPlacedOperations(
+    const std::set<int>& held_modules) {
     std::vector<OperationInstanceId> started;
     for (auto& [operation, placement] : placements_) {
-        if (tryStart(placement, operation)) started.push_back(operation);
+        if (tryStart(placement, operation, held_modules)) started.push_back(operation);
     }
     return started;
 }

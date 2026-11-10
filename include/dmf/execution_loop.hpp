@@ -23,6 +23,9 @@ struct StepReport {
     std::vector<MoveCommand> moves;
     std::vector<MoveFeedback> observed;
     std::map<DropletId, Point> evacuation_targets;
+    std::map<DropletId, int> crossing_modules;
+    std::vector<DropletId> waiting_for_crossing;
+    std::vector<int> held_modules;
     std::vector<DropletId> evacuated;
     std::vector<DropletId> waiting_for_evacuation;
     std::vector<OperationInstanceId> started;
@@ -32,6 +35,7 @@ struct StepReport {
     int async_field_swaps = 0;
     int stale_field_decisions = 0;
     long long routing_microseconds = 0;
+    long long connectivity_check_microseconds = 0;
     long long blockage_update_microseconds = 0;
 };
 
@@ -45,7 +49,8 @@ public:
 
     ExecutionLoop(DynamicDag& dag, UpperLayer& upper, Router& router,
                   CompletionFeedbackProvider completion_feedback_provider,
-                  MovementFeedbackProvider movement_provider = {});
+                  MovementFeedbackProvider movement_provider = {},
+                  std::vector<VirtualModule> fixed_blockages = {});
 
     StepReport step();
     void completeEarly(OperationInstanceId operation, CompletionFeedback feedback);
@@ -58,6 +63,7 @@ private:
     Router& router_;
     CompletionFeedbackProvider completion_feedback_provider_;
     MovementFeedbackProvider movement_provider_;
+    std::vector<VirtualModule> fixed_blockages_;
     std::map<OperationInstanceId, int> remaining_cycles_;
     int step_count_ = 0;
 
@@ -65,6 +71,7 @@ private:
     void acceptArrivals(const std::vector<RouteArrival>& arrivals, StepReport& report);
     void acceptStarts(const std::vector<OperationInstanceId>& started, StepReport& report);
     void updateBlockages(StepReport& report);
+    void prepareCrossings(StepReport& report);
 };
 
 }  // namespace dmf

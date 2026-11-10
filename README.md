@@ -2,7 +2,7 @@
 
 本工程依据论文 [A Two-Layer Decoupled Synthesis Framework for Uncertain Biochemical Protocols on Active-Matrix Digital Microfluidic Platforms](https://doi.org/10.1109/TCAD.2026.3721419) 逐步复现。论文给出了框架和伪代码，没有公开完整实现与实验生成程序。工程使用 C++17，文档使用中文。
 
-当前 `main` 分支处于 **v0.8：异步代价场更新**。每个正式版本都用 Git 标签保存；桌面的 `PROJECT/versions/版本号` 是可独立用 Visual Studio 打开的源码副本。此前可运行但简化较多的探索原型保存在 Git 标签 `v0.0-prototype`，不作为论文数值复现结果。
+当前 `main` 分支处于 **v0.9：操作区域启用前的断路检查与提前转移**。每个正式版本都用 Git 标签保存；桌面的 `PROJECT/versions/版本号` 是可独立用 Visual Studio 打开的源码副本。此前可运行但简化较多的探索原型保存在 Git 标签 `v0.0-prototype`，不作为论文数值复现结果。
 
 ## 先理解两个图
 
@@ -179,11 +179,33 @@ v0.6 示例使用 **15×9** 阵列，初始液滴分别位于 `(1,2)`、`(1,6)`�
             旧场暂时指导方向 → 下一控制步使用新场
 ```
 
-默认 `am_dmf.exe` 演示使用 **120×120** 阵列，液滴从 `(0,60)` 运送到 `(119,60)`。第 10 步在 `x=55～65、y=55～65` 加入障碍，第 40 步移除。控制台会显示变化通知、旧场使用、新场启用、最终到达、总步数和等待步数。后台计算结束的具体步数受系统线程调度影响；运行时可能与示例截图不同。`am_dmf.exe evacuation` 保留 v0.7 的撤离演示。
+v0.8 独立快照的默认演示使用 **120×120** 阵列，液滴从 `(0,60)` 运送到 `(119,60)`。第 10 步在 `x=55～65、y=55～65` 加入障碍，第 40 步移除。当前版本使用 `am_dmf.exe async` 运行相同演示。控制台会显示变化通知、旧场使用、新场启用、最终到达、总步数和等待步数。后台计算结束的具体步数受系统线程调度影响；运行时可能与示例截图不同。`am_dmf.exe evacuation` 保留 v0.7 的撤离演示。
 
 工程中的异步边界是**障碍变化后的重算**：首次遇到一个全新目标仍同步构建代价场；显式测试等待函数用于测试，不在正常控制循环中调用。若旧场把可行方向估成不可达，液滴可能暂等新场，故本版保证的是每步安全性，不声称所有可达任务必然完成。`cost fields built` 只计入已安装的场，不包括被丢弃的后台旧版本。
 
 `dmf_async_cost_field_tests.exe` 检查连续变化只接受最新版、旧场期间不进入新障碍、多个液滴共用目标，以及后台计算完成后的切换。`dmf_field_benchmark.exe` 对同一场景重复 10 次，分别统计“变化通知”和“变化后首次决策”的耗时中位数、总步数与等待步数；比较 v0.7 时需分别编译两个版本的 Release 程序。这个小场景只能检验局部开销与功能，不能替代论文的大规模实验或实时性上界证明。
+
+## v0.9 新增：启用操作区域前检查是否会切断运送路线
+
+v0.7 已能把**位于预告操作区域内**的无关液滴撤走。v0.9 处理另一种情况：液滴仍在区域外，但该区域一旦变为正式 blockage，液滴与自己的目标可能被隔在两边。Router 会在操作启动前，分别检查“当前障碍布局”和“再加入该操作区域后的布局”。如果当前能到达、加入后不能到达，就标记这滴液体需要**提前转移**；上层暂缓启动操作。
+
+```text
+选定操作区域 → 假设它已启用，检查路线是否连通
+                               ↓
+                    会断路：暂缓操作启动
+                               ↓
+          液滴先穿过尚未启用的区域，到达目标一侧
+                               ↓
+                    再允许操作启动
+```
+
+连通性结果按操作区域缓存，多滴液体共用；同一布局的普通控制步不重复生成整张连通图。提前转移时，Router 用 BFS 寻找一条到“目标所在一侧”的短路径，每一步仍检查实际障碍、其他液滴的当前位置与上一位置、安全距离。位置反馈失败时，从实际位置重试；路径被其他液滴挡住时重新搜索。如果当前没有安全转移路径，`waiting_for_crossing` 会报告等待，操作继续保持预留状态。提前转移期间，所有预留操作区域暂停启用，以免液滴正穿过时区域突然变成障碍；这是一条偏保守的工程规则，可能减少并行操作数量。
+
+默认演示使用 **9×9** 阵列。上下两块固定障碍分别占 `x=3～5、y=0～2` 和 `x=3～5、y=6～8`，中间留下唯一通道 `x=3～5、y=3～5`；Detect 预留的区域恰好覆盖通道。液滴 2 从 `(1,4)` 送往右侧输出口 `(8,4)`，先穿过通道到达右侧，Detect 才启动。当前示例中，前 6 步执行提前转移，第 10 步启动 Detect，第 12 步完成；具体步数由本工程的移动和操作时长设定决定，不是论文数据。固定障碍是仿真场景的一部分，不表示芯片硬件接入。
+
+`dmf_crossing_tests.exe` 检查安全提前转移、通道被另一滴液体占用时保持等待、移动失败后按实际位置重试。`StepReport` 的 `crossing_modules`、`waiting_for_crossing` 和 `held_modules` 说明本步哪些液滴正在转移、哪些仍在等待、哪些操作区域暂缓启动。`connectivity_check_microseconds` 记录上层在控制步中请求断路检查的时间；Router 自身规划时的再次检查计入 `routing_microseconds`。
+
+本版只为**已有运送目标**的液滴提前检查连通性。若没有安全转移路线，系统会等待并报告原因，尚不会自动更换操作区域；若正式障碍未经预告就覆盖液滴所在电极，仍视为无效仿真状态。多个预告区域之间更复杂的调度和完成性保证也有待后续实验验证。
 
 ## 编译与运行
 
@@ -195,10 +217,11 @@ cmake --build build --config Debug
 ctest --test-dir build -C Debug --output-on-failure
 ```
 
-演示程序不填参数时运行 v0.8 的异步代价场演示；`evacuation` 保留 v0.7 的撤离演示，`protocol` 保留 v0.6 的两条完整协议演示，`detour` 保留 v0.5 的强制绕障演示，`timed` 保留 v0.4 的原演示，`router` 保留 v0.3 的逐步路由演示，`placement` 保留 v0.2 的手动到达演示；`output` 和 `waste` 保留 v0.1 的纯逻辑 CFG 分支演示。使用 Visual Studio 多配置生成器时，例如：
+演示程序不填参数时运行 v0.9 的提前转移演示；`async` 保留 v0.8 的异步代价场演示，`evacuation` 保留 v0.7 的撤离演示，`protocol` 保留 v0.6 的两条完整协议演示，`detour` 保留 v0.5 的强制绕障演示，`timed` 保留 v0.4 的原演示，`router` 保留 v0.3 的逐步路由演示，`placement` 保留 v0.2 的手动到达演示；`output` 和 `waste` 保留 v0.1 的纯逻辑 CFG 分支演示。使用 Visual Studio 多配置生成器时，例如：
 
 ```powershell
 .\build\Debug\am_dmf.exe
+.\build\Debug\am_dmf.exe async
 .\build\Debug\am_dmf.exe evacuation
 .\build\Debug\am_dmf.exe protocol
 .\build\Debug\am_dmf.exe protocol-output
@@ -211,14 +234,15 @@ ctest --test-dir build -C Debug --output-on-failure
 .\build\Debug\am_dmf.exe waste
 .\build\Debug\dmf_custom_route.exe
 .\build\Debug\dmf_async_cost_field_tests.exe
+.\build\Debug\dmf_crossing_tests.exe
 .\build\Debug\dmf_field_benchmark.exe
 ```
 
-若使用单配置生成器，可执行文件通常位于构建目录下。在 Visual Studio 中通过“文件 → 打开 → 文件夹”打开 `PROJECT/versions/v0.8`，等待 CMake 配置完成。选择绿色运行按钮旁的 `am_dmf.exe` 并按 Ctrl+F5，可观察旧场与新场切换；选择 `dmf_async_cost_field_tests.exe` 可看到 `async cost field tests: passed`；选择 `dmf_field_benchmark.exe` 可查看小场景计时。版本文件夹包含完整源码和 `CMakeLists.txt`，不依赖主工程的构建结果。
+若使用单配置生成器，可执行文件通常位于构建目录下。在 Visual Studio 中通过“文件 → 打开 → 文件夹”打开 `PROJECT/versions/v0.9`，等待 CMake 配置完成。选择绿色运行按钮旁的 `am_dmf.exe` 并按 Ctrl+F5，可观察“先转移、后启动 Detect”；选择 `dmf_crossing_tests.exe` 可看到 `crossing tests: passed`。版本文件夹包含完整源码和 `CMakeLists.txt`，不依赖主工程的构建结果。
 
 ## 当前边界与后续步骤
 
-v0.6 已将 Mix、Detect、Output、Waste 贯穿到同一次仿真；v0.7 新增对**提前预告的操作区域**进行安全撤离；v0.8 对已有目标在障碍变化后的代价场重算使用单个后台线程。固定端口的位置、操作时长和撤离出口选择是工程假设。**还没有** Dispense、Split 的物理规则、未预告障碍困住液滴时的处理，也没有论文实验所用的大规模基准和对照结果。当前实现不生成真实电极驱动序列。
+v0.6 已将 Mix、Detect、Output、Waste 贯穿到同一次仿真；v0.7 新增对**提前预告的操作区域**进行安全撤离；v0.8 对已有目标在障碍变化后的代价场重算使用单个后台线程；v0.9 能在区域启用前识别并处理目标被隔断的液滴。固定端口的位置、操作时长和撤离出口选择是工程假设。**还没有** Dispense、Split 的物理规则、自动更换不可行操作区域、未预告障碍困住液滴时的处理，也没有论文实验所用的大规模基准和对照结果。当前实现不生成真实电极驱动序列。
 
 论文没有精确规定所有周期内事件的先后边界。当前固定为“本步完成的操作，其输出液滴和检测分支从下一步开始可用”；这是工程假设。`ExecutionLoop` 默认使用理想移动反馈，v0.5 允许注入失败或成功的位置反馈，但尚未接硬件反馈入口。
 

@@ -5,9 +5,11 @@
 
 #include <array>
 #include <cstdint>
+#include <deque>
 #include <map>
 #include <memory>
 #include <optional>
+#include <set>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -41,12 +43,20 @@ public:
     void setUpcomingBlockages(const std::vector<UpcomingBlockage>& modules);
     std::vector<MoveCommand> planStep();
     std::vector<RouteArrival> applyFeedback(const std::vector<MoveFeedback>& feedback);
+    void prepareUpcomingCrossings();
     void waitForCostFieldUpdates();  // Explicit barrier for reproducible experiments.
 
     bool hasTasks() const;
     int costFieldBuilds() const { return field_builds_; }
     int asyncFieldSwaps() const { return async_field_swaps_; }
     int staleFieldDecisions() const { return stale_field_decisions_; }
+    const std::set<int>& activationHolds() const { return activation_holds_; }
+    const std::map<DropletId, int>& crossingModules() const {
+        return crossing_modules_;
+    }
+    const std::vector<DropletId>& waitingForCrossing() const {
+        return waiting_for_crossing_;
+    }
     const std::map<DropletId, Point>& evacuationTargets() const {
         return evacuation_targets_;
     }
@@ -72,6 +82,13 @@ private:
     std::map<DropletId, RoutingTask> tasks_;
     std::vector<int> upcoming_region_;
     std::map<DropletId, int> upcoming_input_owners_;
+    std::vector<UpcomingBlockage> upcoming_blockages_;
+    std::map<DropletId, int> crossing_modules_;
+    std::map<DropletId, std::pair<int, std::deque<Point>>> crossing_paths_;
+    std::vector<DropletId> waiting_for_crossing_;
+    std::set<int> activation_holds_;
+    std::vector<int> open_components_;
+    std::map<int, std::vector<int>> future_components_;
     std::map<DropletId, Point> evacuation_targets_;
     std::vector<DropletId> evacuated_last_step_;
     std::vector<DropletId> waiting_for_evacuation_;
@@ -100,6 +117,11 @@ private:
     void refreshEvacuations(const Occupancy& occupied);
     void discardUnusedFields(Point target);
     void environmentChanged();
+    std::vector<int> components(const std::vector<unsigned char>& blocked) const;
+    const std::vector<int>& openComponents();
+    const std::vector<int>& futureComponents(const VirtualModule& module);
+    std::optional<Point> nextCrossingMove(DropletId droplet, int module_id,
+                                           const Occupancy& occupied);
     void installUpdatedField(CostFieldKey key, std::vector<int> field);
     int futureCost(Point candidate, DropletId droplet,
                    const Occupancy& occupancy, const std::vector<int>& field) const;

@@ -41,13 +41,16 @@ target_link_libraries(dmf_evacuation_tests PRIVATE dmf_core)
 add_executable(dmf_async_cost_field_tests tests/async_cost_field_tests.cpp)
 target_link_libraries(dmf_async_cost_field_tests PRIVATE dmf_core)
 
+add_executable(dmf_crossing_tests tests/crossing_tests.cpp)
+target_link_libraries(dmf_crossing_tests PRIVATE dmf_core)
+
 add_executable(dmf_field_benchmark benchmarks/field_update_benchmark.cpp)
 target_link_libraries(dmf_field_benchmark PRIVATE dmf_core)
 
 foreach(target dmf_core am_dmf dmf_custom_route dmf_runtime_tests
                dmf_placement_tests dmf_router_tests dmf_execution_tests
                dmf_protocol_execution_tests dmf_evacuation_tests
-               dmf_async_cost_field_tests dmf_field_benchmark)
+               dmf_async_cost_field_tests dmf_crossing_tests dmf_field_benchmark)
   if(MSVC)
     target_compile_options(${target} PRIVATE /W4 /permissive- /EHsc)
   else()
@@ -63,7 +66,9 @@ add_test(NAME execution_tests COMMAND dmf_execution_tests)
 add_test(NAME protocol_execution_tests COMMAND dmf_protocol_execution_tests)
 add_test(NAME evacuation_tests COMMAND dmf_evacuation_tests)
 add_test(NAME async_cost_field_tests COMMAND dmf_async_cost_field_tests)
-add_test(NAME async_demo COMMAND am_dmf)
+add_test(NAME crossing_tests COMMAND dmf_crossing_tests)
+add_test(NAME crossing_demo COMMAND am_dmf)
+add_test(NAME async_demo COMMAND am_dmf async)
 add_test(NAME evacuation_demo COMMAND am_dmf evacuation)
 add_test(NAME protocol_demo COMMAND am_dmf protocol)
 add_test(NAME placement_demo COMMAND am_dmf placement)

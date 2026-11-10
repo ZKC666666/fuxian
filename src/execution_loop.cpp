@@ -15,10 +15,12 @@ long long elapsedMicroseconds(Clock::time_point start) {
 
 ExecutionLoop::ExecutionLoop(DynamicDag& dag, UpperLayer& upper, Router& router,
                              CompletionFeedbackProvider completion_feedback_provider,
-                             MovementFeedbackProvider movement_provider)
+                             MovementFeedbackProvider movement_provider,
+                             std::vector<VirtualModule> fixed_blockages)
     : dag_(dag), upper_(upper), router_(router),
       completion_feedback_provider_(std::move(completion_feedback_provider)),
-      movement_provider_(std::move(movement_provider)) {
+      movement_provider_(std::move(movement_provider)),
+      fixed_blockages_(std::move(fixed_blockages)) {
     if (!completion_feedback_provider_) {
         throw std::invalid_argument("completion feedback provider is empty");
     }
@@ -34,7 +36,8 @@ void ExecutionLoop::recordStart(OperationInstanceId operation, StepReport& repor
 void ExecutionLoop::acceptArrivals(const std::vector<RouteArrival>& arrivals,
                                    StepReport& report) {
     for (const auto& arrival : arrivals) {
-        if (upper_.reportArrival(arrival.operation, arrival.droplet)) {
+        if (upper_.reportArrival(arrival.operation, arrival.droplet,
+                                 router_.activationHolds())) {
             recordStart(arrival.operation, report);
         }
     }
@@ -47,9 +50,18 @@ void ExecutionLoop::acceptStarts(const std::vector<OperationInstanceId>& started
 
 void ExecutionLoop::updateBlockages(StepReport& report) {
     const auto start = Clock::now();
-    router_.setBlockages(upper_.activeBlockages());
+    auto blockages = fixed_blockages_;
+    const auto active = upper_.activeBlockages();
+    blockages.insert(blockages.end(), active.begin(), active.end());
+    router_.setBlockages(blockages);
     router_.setUpcomingBlockages(upper_.upcomingBlockages());
     report.blockage_update_microseconds += elapsedMicroseconds(start);
+}
+
+void ExecutionLoop::prepareCrossings(StepReport& report) {
+    const auto start = Clock::now();
+    router_.prepareUpcomingCrossings();
+    report.connectivity_check_microseconds += elapsedMicroseconds(start);
 }
 
 StepReport ExecutionLoop::step() {
@@ -62,15 +74,23 @@ StepReport ExecutionLoop::step() {
     const auto running_before = remaining_cycles_;
 
     report.routing_tasks = upper_.placeReadyOperations();
-    acceptArrivals(router_.addTasks(report.routing_tasks), report);
-    acceptStarts(upper_.tryStartPlacedOperations(), report);
+    const auto immediate_arrivals = router_.addTasks(report.routing_tasks);
     updateBlockages(report);
+    prepareCrossings(report);
+    acceptArrivals(immediate_arrivals, report);
+    acceptStarts(upper_.tryStartPlacedOperations(router_.activationHolds()), report);
+    updateBlockages(report);
+    prepareCrossings(report);
 
     if (router_.hasTasks()) {
         const auto routing_start = Clock::now();
         report.moves = router_.planStep();
         report.routing_microseconds = elapsedMicroseconds(routing_start);
         report.evacuation_targets = router_.evacuationTargets();
+        report.crossing_modules = router_.crossingModules();
+        report.waiting_for_crossing = router_.waitingForCrossing();
+        report.held_modules.assign(router_.activationHolds().begin(),
+                                   router_.activationHolds().end());
         report.waiting_for_evacuation = router_.waitingForEvacuation();
         report.observed.reserve(report.moves.size());
         for (const auto& move : report.moves) {
@@ -79,9 +99,11 @@ StepReport ExecutionLoop::step() {
                                       : move.to;
             report.observed.push_back({move.droplet, position});
         }
-        acceptArrivals(router_.applyFeedback(report.observed), report);
+        const auto arrivals = router_.applyFeedback(report.observed);
+        prepareCrossings(report);
+        acceptArrivals(arrivals, report);
         report.evacuated = router_.evacuatedLastStep();
-        acceptStarts(upper_.tryStartPlacedOperations(), report);
+        acceptStarts(upper_.tryStartPlacedOperations(router_.activationHolds()), report);
     }
 
     for (const auto& [operation, cycles] : running_before) {
@@ -111,8 +133,12 @@ void ExecutionLoop::completeEarly(OperationInstanceId operation,
     upper_.finishOperation(operation, std::move(feedback.outputs),
                            std::move(feedback.outcome));
     remaining_cycles_.erase(operation);
-    router_.setBlockages(upper_.activeBlockages());
+    auto blockages = fixed_blockages_;
+    const auto active = upper_.activeBlockages();
+    blockages.insert(blockages.end(), active.begin(), active.end());
+    router_.setBlockages(blockages);
     router_.setUpcomingBlockages(upper_.upcomingBlockages());
+    router_.prepareUpcomingCrossings();
 }
 
 bool ExecutionLoop::allDone() const {

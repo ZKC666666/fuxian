@@ -1,6 +1,7 @@
 #include "dmf/router.hpp"
 
 #include <algorithm>
+#include <cstdlib>
 #include <limits>
 #include <queue>
 #include <set>
@@ -92,6 +93,7 @@ bool Router::upcomingBlocks(Point point, int allowed_module) const {
 }
 
 bool Router::needsEvacuation(DropletId droplet, Point position) const {
+    if (crossing_modules_.count(droplet) != 0) return false;
     const int region = upcomingRegion(position);
     if (region == 0) return false;
     const auto owner = upcoming_input_owners_.find(droplet);
@@ -185,12 +187,155 @@ void Router::installUpdatedField(CostFieldKey key, std::vector<int> field) {
 }
 
 void Router::environmentChanged() {
+    open_components_.clear();
+    future_components_.clear();
+    crossing_paths_.clear();
     field_snapshot_ = std::make_shared<CostFieldSnapshot>(CostFieldSnapshot{
         width_, height_, field_snapshot_->version + 1, blocked_, upcoming_region_});
     for (const auto& [key, field] : fields_) {
         (void)field;
         field_updater_.schedule(key, field_snapshot_);
     }
+}
+
+std::vector<int> Router::components(
+    const std::vector<unsigned char>& blocked) const {
+    std::vector<int> labels(blocked.size(), 0);
+    std::queue<int> frontier;
+    int component = 0;
+    for (int start = 0; start < static_cast<int>(blocked.size()); ++start) {
+        if (blocked[start] || labels[start] != 0) continue;
+        labels[start] = ++component;
+        frontier.push(start);
+        while (!frontier.empty()) {
+            const int cell = frontier.front();
+            frontier.pop();
+            const Point point{cell % width_, cell / width_};
+            for (const auto next : neighbors(point)) {
+                if (!contains(next)) continue;
+                const int next_cell = index(next);
+                if (blocked[next_cell] || labels[next_cell] != 0) continue;
+                labels[next_cell] = component;
+                frontier.push(next_cell);
+            }
+        }
+    }
+    return labels;
+}
+
+const std::vector<int>& Router::openComponents() {
+    if (open_components_.empty()) open_components_ = components(blocked_);
+    return open_components_;
+}
+
+const std::vector<int>& Router::futureComponents(const VirtualModule& module) {
+    const auto found = future_components_.find(module.id);
+    if (found != future_components_.end()) return found->second;
+    auto blocked = blocked_;
+    for (int y = module.top_left.y; y < module.top_left.y + module.side; ++y) {
+        for (int x = module.top_left.x; x < module.top_left.x + module.side; ++x) {
+            blocked[index({x, y})] = 1;
+        }
+    }
+    return future_components_.emplace(module.id, components(blocked))
+        .first->second;
+}
+
+void Router::prepareUpcomingCrossings() {
+    const auto previous_crossings = crossing_modules_;
+    crossing_modules_.clear();
+    activation_holds_.clear();
+    if (upcoming_blockages_.empty()) return;
+    for (const auto& [droplet, task] : tasks_) {
+        const int current = index(positions_.at(droplet));
+        const auto& open = openComponents();
+        if (open[current] == 0 || open[current] != open[index(task.target)]) continue;
+        for (const auto& upcoming : upcoming_blockages_) {
+            const auto& module = upcoming.module;
+            if (task.module_id == module.id) continue;
+            const auto position = positions_.at(droplet);
+            const bool inside = position.x >= module.top_left.x &&
+                                position.x < module.top_left.x + module.side &&
+                                position.y >= module.top_left.y &&
+                                position.y < module.top_left.y + module.side;
+            const auto previous = previous_crossings.find(droplet);
+            if (inside && (previous == previous_crossings.end() ||
+                           previous->second != module.id)) continue;
+            const auto& future = futureComponents(module);
+            if (future[current] != 0 &&
+                future[current] == future[index(task.target)]) continue;
+            crossing_modules_.emplace(droplet, module.id);
+            break;
+        }
+    }
+    for (auto it = crossing_paths_.begin(); it != crossing_paths_.end();) {
+        const auto crossing = crossing_modules_.find(it->first);
+        if (crossing == crossing_modules_.end() ||
+            crossing->second != it->second.first) {
+            it = crossing_paths_.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    if (!crossing_modules_.empty()) {
+        // A crossing may use any reserved area, so none can activate mid-crossing.
+        for (const auto& upcoming : upcoming_blockages_) {
+            activation_holds_.insert(upcoming.module.id);
+        }
+    }
+}
+
+std::optional<Point> Router::nextCrossingMove(DropletId droplet, int module_id,
+                                               const Occupancy& occupied) {
+    const auto start = positions_.at(droplet);
+    auto cached = crossing_paths_.find(droplet);
+    if (cached != crossing_paths_.end() && !cached->second.second.empty()) {
+        const auto next = cached->second.second.front();
+        const int distance = std::abs(next.x - start.x) + std::abs(next.y - start.y);
+        if (cached->second.first == module_id && distance == 1 &&
+            legal(next, droplet, occupied)) return next;
+    }
+    crossing_paths_.erase(droplet);
+
+    const auto module = std::find_if(upcoming_blockages_.begin(),
+                                     upcoming_blockages_.end(),
+                                     [&](const auto& entry) {
+                                         return entry.module.id == module_id;
+                                     });
+    if (module == upcoming_blockages_.end()) return std::nullopt;
+    const auto& components = futureComponents(module->module);
+    const int target_side = components[index(tasks_.at(droplet).target)];
+    if (target_side == 0) return std::nullopt;
+    std::vector<int> previous(blocked_.size(), -1);
+    std::queue<int> frontier;
+    const int start_cell = index(start);
+    previous[start_cell] = start_cell;
+    frontier.push(start_cell);
+    int exit_cell = -1;
+    while (!frontier.empty() && exit_cell == -1) {
+        const int cell = frontier.front();
+        frontier.pop();
+        const Point point{cell % width_, cell / width_};
+        for (const auto next : neighbors(point)) {
+            if (!legal(next, droplet, occupied)) continue;
+            const int next_cell = index(next);
+            if (previous[next_cell] != -1) continue;
+            previous[next_cell] = cell;
+            if (components[next_cell] == target_side) {
+                exit_cell = next_cell;
+                break;
+            }
+            frontier.push(next_cell);
+        }
+    }
+    if (exit_cell == -1) return std::nullopt;
+    std::deque<Point> path;
+    for (int cell = exit_cell; cell != start_cell; cell = previous[cell]) {
+        path.push_front({cell % width_, cell / width_});
+    }
+    const Point next = path.front();
+    crossing_paths_[droplet] = {module_id, std::move(path)};
+    return next;
 }
 
 void Router::waitForCostFieldUpdates() {
@@ -301,6 +446,7 @@ void Router::setUpcomingBlockages(const std::vector<UpcomingBlockage>& modules) 
     upcoming_signature_ = std::move(signature);
     upcoming_region_ = std::move(next_region);
     upcoming_input_owners_ = std::move(owners);
+    upcoming_blockages_ = modules;
     evacuation_targets_.clear();
     waiting_for_evacuation_.clear();
     environmentChanged();
@@ -308,10 +454,17 @@ void Router::setUpcomingBlockages(const std::vector<UpcomingBlockage>& modules) 
 
 std::vector<MoveCommand> Router::planStep() {
     if (!pending_.empty()) throw std::logic_error("movement feedback is still pending");
+    prepareUpcomingCrossings();
+    waiting_for_crossing_.clear();
     auto occupied = occupancy();
     refreshEvacuations(occupied);
     evacuated_last_step_.clear();
     std::set<DropletId> moving;
+    std::set<int> modules_with_crossings;
+    for (const auto& [droplet, module_id] : crossing_modules_) {
+        (void)droplet;
+        modules_with_crossings.insert(module_id);
+    }
     for (const auto& [droplet, task] : tasks_) {
         (void)task;
         moving.insert(droplet);
@@ -322,11 +475,29 @@ std::vector<MoveCommand> Router::planStep() {
     }
     for (const auto droplet : moving) {
         const auto current = positions_.at(droplet);
+        const auto crossing = crossing_modules_.find(droplet);
         const auto evacuation = evacuation_targets_.find(droplet);
         if (evacuation == evacuation_targets_.end() &&
             needsEvacuation(droplet, current)) continue;
         const bool evacuating = evacuation != evacuation_targets_.end();
         const auto target = evacuating ? evacuation->second : tasks_.at(droplet).target;
+        if (!evacuating && crossing == crossing_modules_.end() &&
+            modules_with_crossings.count(tasks_.at(droplet).module_id) != 0) {
+            occupied.planned[index(current)] = droplet;
+            pending_.push_back({droplet, current, current});
+            continue;
+        }
+        if (crossing != crossing_modules_.end()) {
+            const auto next = nextCrossingMove(droplet, crossing->second, occupied);
+            if (!next) waiting_for_crossing_.push_back(droplet);
+            const auto chosen = next.value_or(current);
+            if (!legal(chosen, droplet, occupied)) {
+                throw std::logic_error("no safe position for crossing droplet");
+            }
+            occupied.planned[index(chosen)] = droplet;
+            pending_.push_back({droplet, current, chosen});
+            continue;
+        }
         const auto owner = upcoming_input_owners_.find(droplet);
         int allowed_module = 0;
         if (evacuating) allowed_module = -1;
@@ -425,6 +596,11 @@ std::vector<RouteArrival> Router::applyFeedback(
     std::vector<RouteArrival> arrived;
     for (const auto& command : pending_) {
         const auto position = observed.at(command.droplet);
+        const auto path = crossing_paths_.find(command.droplet);
+        if (path != crossing_paths_.end() && !path->second.second.empty() &&
+            position == path->second.second.front()) {
+            path->second.second.pop_front();
+        }
         positions_[command.droplet] = position;
         const auto evacuation = evacuation_targets_.find(command.droplet);
         if (evacuation != evacuation_targets_.end() &&

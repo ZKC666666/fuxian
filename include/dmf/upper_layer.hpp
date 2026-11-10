@@ -18,8 +18,10 @@ public:
                std::map<OperationType, Point> terminal_ports = {});
 
     std::vector<RoutingTask> placeReadyOperations();
-    bool reportArrival(OperationInstanceId operation, DropletId droplet);
-    std::vector<OperationInstanceId> tryStartPlacedOperations();
+    bool reportArrival(OperationInstanceId operation, DropletId droplet,
+                       const std::set<int>& held_modules = {});
+    std::vector<OperationInstanceId> tryStartPlacedOperations(
+        const std::set<int>& held_modules = {});
     void finishOperation(OperationInstanceId operation, std::vector<DropletId> outputs,
                          std::optional<std::string> outcome = std::nullopt);
 
@@ -49,7 +51,8 @@ private:
     static std::vector<Point> targetsFor(OperationType type,
                                          const VirtualModule& module,
                                          std::size_t input_count);
-    bool tryStart(Placement& placement, OperationInstanceId operation);
+    bool tryStart(Placement& placement, OperationInstanceId operation,
+                  const std::set<int>& held_modules);
 };
 
 }  // namespace dmf

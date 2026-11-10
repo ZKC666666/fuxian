@@ -290,6 +290,69 @@ void runEvacuationExample() {
               << positions.at(99).y << ")\n";
 }
 
+void runCrossingExample() {
+    using dmf::InputRef;
+    using dmf::OperationType;
+    dmf::BlockSpec block{
+        "start", 2,
+        {{"detect", OperationType::Detect, {InputRef::entry(0)}, 1},
+         {"send", OperationType::Output, {InputRef::entry(1)}, 0}},
+        std::nullopt};
+    dmf::DynamicDag dag({"start", {{"start", std::move(block)}}});
+    const auto instance = dag.activateStart({1, 2});
+    const auto detect = dag.operationFor(instance, "detect");
+    dmf::DropletPositions positions{{1, {7, 3}}, {2, {1, 4}}};
+    dmf::VirtualChip chip(1, 1);
+    dmf::UpperLayer upper(dag, chip,
+                          {{OperationType::Detect, {3, 3, 2}}}, positions,
+                          {{OperationType::Output, {8, 4}}});
+    dmf::Router router(chip.width(), chip.height(), positions);
+    dmf::ExecutionLoop loop(
+        dag, upper, router,
+        [detect](int operation) {
+            return dmf::CompletionFeedback{
+                operation == detect ? std::vector<int>{3} : std::vector<int>{},
+                std::nullopt};
+        }, {}, {{10, {3, 0}, 3}, {11, {3, 6}, 3}});
+
+    std::cout << "chip=9x9; fixed walls x=3..5 at y=0..2 and y=6..8\n"
+              << "future Detect module x=3..5, y=3..5\n"
+              << "droplet 2=(1,4) -> output (8,4); Detect input 1=(7,3)\n";
+    int crossing_steps = 0;
+    long long crossing_check_microseconds = 0;
+    for (int step = 0; step < 50 && !loop.allDone(); ++step) {
+        const auto report = loop.step();
+        crossing_check_microseconds += report.connectivity_check_microseconds;
+        std::cout << "step " << report.step << ": ";
+        if (report.crossing_modules.count(2) != 0) {
+            ++crossing_steps;
+            std::cout << "transfer droplet 2 before module 1 starts; ";
+        }
+        for (const auto& move : report.moves) {
+            if (move.droplet == 2 && !(move.from == move.to)) {
+                std::cout << "droplet 2 -> (" << move.to.x << ',' << move.to.y
+                          << "); ";
+            }
+        }
+        if (std::find(report.waiting_for_crossing.begin(),
+                      report.waiting_for_crossing.end(), 2) !=
+            report.waiting_for_crossing.end()) {
+            std::cout << "waiting for safe crossing; ";
+        }
+        if (std::find(report.started.begin(), report.started.end(), detect) !=
+            report.started.end()) std::cout << "start Detect; ";
+        for (const auto operation : report.completed) {
+            std::cout << "finish " << dag.operation(operation).spec_id << "; ";
+        }
+        std::cout << "active blockages=" << report.active_blockages << '\n';
+    }
+    if (!loop.allDone()) throw std::runtime_error("crossing demo exceeded 50 steps");
+    std::cout << "completed=" << std::boolalpha << loop.allDone()
+              << ", crossing steps=" << crossing_steps
+              << ", connectivity check total (microseconds)="
+              << crossing_check_microseconds << '\n';
+}
+
 void runAsyncExample() {
     using Clock = std::chrono::steady_clock;
     dmf::DropletPositions positions{{1, {0, 60}}};
@@ -419,17 +482,18 @@ void runTimedExample(TimedExample example) {
 }  // namespace
 
 int main(int argc, char** argv) {
-    const std::string mode = argc == 1 ? "async" : (argc == 2 ? argv[1] : "");
-    if (mode != "async" && mode != "evacuation" && mode != "protocol" &&
+    const std::string mode = argc == 1 ? "crossing" : (argc == 2 ? argv[1] : "");
+    if (mode != "crossing" && mode != "async" && mode != "evacuation" && mode != "protocol" &&
         mode != "protocol-output" && mode != "protocol-waste" &&
         mode != "detour" && mode != "timed" && mode != "router" &&
         mode != "placement" && mode != "output" && mode != "waste") {
-        std::cerr << "usage: am_dmf [async|evacuation|protocol|protocol-output|protocol-waste|"
+        std::cerr << "usage: am_dmf [crossing|async|evacuation|protocol|protocol-output|protocol-waste|"
                      "detour|timed|router|placement|output|waste]\n";
         return 2;
     }
     try {
-        if (mode == "async") runAsyncExample();
+        if (mode == "crossing") runCrossingExample();
+        else if (mode == "async") runAsyncExample();
         else if (mode == "evacuation") runEvacuationExample();
         else if (mode == "protocol") {
             runProtocolExample("output");
