@@ -37,6 +37,12 @@ void Protocol::validate() const {
             if (operation.id.empty() || !operations.emplace(operation.id, &operation).second) {
                 throw std::invalid_argument("empty or duplicate operation id in block: " + block_id);
             }
+            if ((operation.type == OperationType::Dispense &&
+                 (!operation.inputs.empty() || operation.output_count != 1)) ||
+                (operation.type == OperationType::Split &&
+                 (operation.inputs.size() != 1 || operation.output_count != 2))) {
+                throw std::invalid_argument("invalid dispense or split input/output count");
+            }
         }
 
         std::map<std::string, std::size_t> indegree;

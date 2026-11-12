@@ -33,6 +33,124 @@ dmf::Protocol exampleProtocol() {
                       {"waste", std::move(waste)}}};
 }
 
+dmf::Protocol completeProtocol() {
+    using dmf::InputRef;
+    using dmf::OperationType;
+    dmf::BlockSpec start{
+        "start", 0,
+        {{"source_a", OperationType::Dispense, {}, 1},
+         {"source_b", OperationType::Dispense, {}, 1},
+         {"mix", OperationType::Mix,
+          {InputRef::output("source_a"), InputRef::output("source_b")}, 1},
+         {"split", OperationType::Split, {InputRef::output("mix")}, 2},
+         {"detect", OperationType::Detect, {InputRef::output("split", 0)}, 1},
+         {"discard_second", OperationType::Waste,
+          {InputRef::output("split", 1)}, 0}},
+        dmf::DecisionSpec{"detect", {{"output", {"output", {0}}},
+                                     {"waste", {"waste", {0}}}}}};
+    dmf::BlockSpec output{
+        "output", 1,
+        {{"send", OperationType::Output, {InputRef::entry(0)}, 0}},
+        std::nullopt};
+    dmf::BlockSpec waste{
+        "waste", 1,
+        {{"discard", OperationType::Waste, {InputRef::entry(0)}, 0}},
+        std::nullopt};
+    return {"start", {{"start", std::move(start)},
+                      {"output", std::move(output)},
+                      {"waste", std::move(waste)}}};
+}
+
+void runCompleteProtocol(const std::string& outcome) {
+    using dmf::OperationType;
+    dmf::DynamicDag dag(completeProtocol());
+    dag.activateStart({});
+    dmf::DropletPositions positions;
+    dmf::VirtualChip chip(2, 1);
+    dmf::UpperLayer upper(
+        dag, chip,
+        {{OperationType::Dispense, {1, 1, 1}},
+         {OperationType::Mix, {3, 3, 3}},
+         {OperationType::Split, {3, 1, 2}},
+         {OperationType::Detect, {3, 3, 2}}},
+        positions,
+        {{OperationType::Output, {14, 4}}, {OperationType::Waste, {0, 8}}},
+        {{"source_a", {0, 1}}, {"source_b", {0, 7}}});
+    dmf::Router router(chip.width(), chip.height(), positions);
+    dmf::ExecutionLoop loop(
+        dag, upper, router,
+        [&dag, &outcome](int operation) {
+            const auto& name = dag.operation(operation).spec_id;
+            if (name == "source_a") return dmf::CompletionFeedback{{1}, std::nullopt};
+            if (name == "source_b") return dmf::CompletionFeedback{{2}, std::nullopt};
+            if (name == "mix") return dmf::CompletionFeedback{{3}, std::nullopt};
+            if (name == "split") return dmf::CompletionFeedback{{4, 5}, std::nullopt};
+            if (name == "detect") return dmf::CompletionFeedback{{6}, outcome};
+            return dmf::CompletionFeedback{{}, std::nullopt};
+        });
+
+    std::cout << "full protocol branch=" << outcome << ", chip="
+              << chip.width() << 'x' << chip.height() << '\n';
+    int completed_steps = 0;
+    int output_wait_steps = 0;
+    long long routing_microseconds = 0;
+    long long connectivity_microseconds = 0;
+    long long blockage_microseconds = 0;
+    for (int step = 0; step < 180 && !loop.allDone(); ++step) {
+        const auto report = loop.step();
+        completed_steps = report.step;
+        if (!report.waiting_for_output_space.empty()) ++output_wait_steps;
+        routing_microseconds += report.routing_microseconds;
+        connectivity_microseconds += report.connectivity_check_microseconds;
+        blockage_microseconds += report.blockage_update_microseconds;
+        std::cout << "step " << report.step << ": ";
+        for (const auto block : report.activated_blocks) {
+            std::cout << "activate " << dag.blockName(block) << "; ";
+        }
+        for (const auto& task : report.routing_tasks) {
+            std::cout << "route d" << task.droplet << " to ("
+                      << task.target.x << ',' << task.target.y << "); ";
+        }
+        for (const auto& move : report.moves) {
+            if (!(move.from == move.to)) {
+                std::cout << "d" << move.droplet << " -> ("
+                          << move.to.x << ',' << move.to.y << "); ";
+            }
+        }
+        for (const auto operation : report.started) {
+            std::cout << "start " << dag.operation(operation).spec_id << "; ";
+        }
+        for (const auto operation : report.completed) {
+            const auto& done = dag.operation(operation);
+            std::cout << "finish " << done.spec_id;
+            if (!done.outputs.empty()) {
+                std::cout << " ->";
+                for (const auto droplet : done.outputs) {
+                    const auto point = positions.at(droplet);
+                    std::cout << " d" << droplet << "(" << point.x << ','
+                              << point.y << ')';
+                }
+            }
+            std::cout << "; ";
+        }
+        for (const auto operation : report.waiting_for_output_space) {
+            std::cout << "wait for output space: "
+                      << dag.operation(operation).spec_id << "; ";
+        }
+        std::cout << "active blockages=" << report.active_blockages << '\n';
+    }
+    if (!loop.allDone()) throw std::runtime_error("full protocol exceeded 180 steps");
+    std::cout << "completed=" << std::boolalpha << loop.allDone()
+              << ", active droplets=" << positions.size()
+              << ", activated blocks=" << dag.blockCount()
+              << ", steps=" << completed_steps
+              << ", output wait steps=" << output_wait_steps << '\n'
+              << "time (microseconds, excluding console output): routing="
+              << routing_microseconds << ", connectivity="
+              << connectivity_microseconds << ", blockage updates="
+              << blockage_microseconds << '\n';
+}
+
 void runExample(const std::string& outcome) {
     dmf::DynamicDag dag(exampleProtocol());
     const auto start = dag.activateStart({1, 2});
@@ -482,17 +600,25 @@ void runTimedExample(TimedExample example) {
 }  // namespace
 
 int main(int argc, char** argv) {
-    const std::string mode = argc == 1 ? "crossing" : (argc == 2 ? argv[1] : "");
-    if (mode != "crossing" && mode != "async" && mode != "evacuation" && mode != "protocol" &&
+    const std::string mode = argc == 1 ? "full" : (argc == 2 ? argv[1] : "");
+    if (mode != "full" && mode != "full-output" && mode != "full-waste" &&
+        mode != "crossing" && mode != "async" && mode != "evacuation" && mode != "protocol" &&
         mode != "protocol-output" && mode != "protocol-waste" &&
         mode != "detour" && mode != "timed" && mode != "router" &&
         mode != "placement" && mode != "output" && mode != "waste") {
-        std::cerr << "usage: am_dmf [crossing|async|evacuation|protocol|protocol-output|protocol-waste|"
+        std::cerr << "usage: am_dmf [full|full-output|full-waste|crossing|async|evacuation|"
+                     "protocol|protocol-output|protocol-waste|"
                      "detour|timed|router|placement|output|waste]\n";
         return 2;
     }
     try {
-        if (mode == "crossing") runCrossingExample();
+        if (mode == "full") {
+            runCompleteProtocol("output");
+            std::cout << '\n';
+            runCompleteProtocol("waste");
+        } else if (mode == "full-output") runCompleteProtocol("output");
+        else if (mode == "full-waste") runCompleteProtocol("waste");
+        else if (mode == "crossing") runCrossingExample();
         else if (mode == "async") runAsyncExample();
         else if (mode == "evacuation") runEvacuationExample();
         else if (mode == "protocol") {

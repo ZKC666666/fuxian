@@ -47,6 +47,7 @@ public:
     void waitForCostFieldUpdates();  // Explicit barrier for reproducible experiments.
 
     bool hasTasks() const;
+    int minimumSeparation() const { return minimum_separation_; }
     int costFieldBuilds() const { return field_builds_; }
     int asyncFieldSwaps() const { return async_field_swaps_; }
     int staleFieldDecisions() const { return stale_field_decisions_; }

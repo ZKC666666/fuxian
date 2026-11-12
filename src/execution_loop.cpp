@@ -24,6 +24,9 @@ ExecutionLoop::ExecutionLoop(DynamicDag& dag, UpperLayer& upper, Router& router,
     if (!completion_feedback_provider_) {
         throw std::invalid_argument("completion feedback provider is empty");
     }
+    if (upper_.minimumSeparation() != router_.minimumSeparation()) {
+        throw std::invalid_argument("upper layer and router separation must match");
+    }
 }
 
 void ExecutionLoop::recordStart(OperationInstanceId operation, StepReport& report) {
@@ -111,9 +114,19 @@ StepReport ExecutionLoop::step() {
             --remaining_cycles_.at(operation);
             continue;
         }
-        auto feedback = completion_feedback_provider_(operation);
-        upper_.finishOperation(operation, std::move(feedback.outputs),
-                               std::move(feedback.outcome));
+        auto feedback = pending_completion_.find(operation);
+        if (feedback == pending_completion_.end()) {
+            feedback = pending_completion_
+                           .emplace(operation, completion_feedback_provider_(operation))
+                           .first;
+        }
+        if (!upper_.canFinishOperation(operation, feedback->second.outputs)) {
+            report.waiting_for_output_space.push_back(operation);
+            continue;
+        }
+        upper_.finishOperation(operation, feedback->second.outputs,
+                               feedback->second.outcome);
+        pending_completion_.erase(feedback);
         remaining_cycles_.erase(operation);
         report.completed.push_back(operation);
     }
@@ -130,8 +143,18 @@ void ExecutionLoop::completeEarly(OperationInstanceId operation,
     if (remaining_cycles_.count(operation) == 0) {
         throw std::logic_error("operation is not running");
     }
+    const auto pending = pending_completion_.find(operation);
+    if (pending != pending_completion_.end() &&
+        (pending->second.outputs != feedback.outputs ||
+         pending->second.outcome != feedback.outcome)) {
+        throw std::invalid_argument("completion feedback changed while output is waiting");
+    }
+    if (!upper_.canFinishOperation(operation, feedback.outputs)) {
+        throw std::logic_error("operation output positions are occupied");
+    }
     upper_.finishOperation(operation, std::move(feedback.outputs),
                            std::move(feedback.outcome));
+    pending_completion_.erase(operation);
     remaining_cycles_.erase(operation);
     auto blockages = fixed_blockages_;
     const auto active = upper_.activeBlockages();
@@ -142,7 +165,8 @@ void ExecutionLoop::completeEarly(OperationInstanceId operation,
 }
 
 bool ExecutionLoop::allDone() const {
-    return dag_.allDone() && remaining_cycles_.empty() && !router_.hasTasks();
+    return dag_.allDone() && remaining_cycles_.empty() &&
+           pending_completion_.empty() && !router_.hasTasks();
 }
 
 int ExecutionLoop::remainingCycles(OperationInstanceId operation) const {

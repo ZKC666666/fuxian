@@ -30,6 +30,7 @@ struct StepReport {
     std::vector<DropletId> waiting_for_evacuation;
     std::vector<OperationInstanceId> started;
     std::vector<OperationInstanceId> completed;
+    std::vector<OperationInstanceId> waiting_for_output_space;
     std::size_t active_blockages = 0;
     int new_cost_fields = 0;
     int async_field_swaps = 0;
@@ -65,6 +66,7 @@ private:
     MovementFeedbackProvider movement_provider_;
     std::vector<VirtualModule> fixed_blockages_;
     std::map<OperationInstanceId, int> remaining_cycles_;
+    std::map<OperationInstanceId, CompletionFeedback> pending_completion_;
     int step_count_ = 0;
 
     void recordStart(OperationInstanceId operation, StepReport& report);
