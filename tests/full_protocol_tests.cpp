@@ -30,16 +30,16 @@ dmf::Protocol fullProtocol() {
          {"detect", OperationType::Detect, {InputRef::output("split", 0)}, 1},
          {"discard_second", OperationType::Waste,
           {InputRef::output("split", 1)}, 0}},
-        dmf::DecisionSpec{"detect", {{"output", {"output", {0}}},
-                                     {"waste", {"waste", {0}}}}}};
+        {dmf::DecisionSpec{"detect", {{"output", {"output", {0}}},
+                                      {"waste", {"waste", {0}}}}}}};
     dmf::BlockSpec output{
         "output", 1,
         {{"send", OperationType::Output, {InputRef::entry(0)}, 0}},
-        std::nullopt};
+        {}};
     dmf::BlockSpec waste{
         "waste", 1,
         {{"discard", OperationType::Waste, {InputRef::entry(0)}, 0}},
-        std::nullopt};
+        {}};
     return {"start", {{"start", std::move(start)},
                       {"output", std::move(output)},
                       {"waste", std::move(waste)}}};
@@ -71,7 +71,7 @@ void invalidSourceAndSplitShapesAreRejected() {
 void occupiedDispensePortWaitsAndRetries() {
     dmf::BlockSpec block{"start", 0,
                          {{"source", OperationType::Dispense, {}, 1}},
-                         std::nullopt};
+                         {}};
     dmf::DynamicDag dag({"start", {{"start", std::move(block)}}});
     const auto instance = dag.activateStart({});
     const auto source = dag.operationFor(instance, "source");
@@ -102,7 +102,7 @@ void sharedDispensePortIsSerialized() {
         "start", 0,
         {{"first", OperationType::Dispense, {}, 1},
          {"second", OperationType::Dispense, {}, 1}},
-        std::nullopt};
+        {}};
     dmf::DynamicDag dag({"start", {{"start", std::move(block)}}});
     const auto instance = dag.activateStart({});
     const auto first = dag.operationFor(instance, "first");
@@ -133,7 +133,7 @@ void splitWaitsForTwoSafeOutputCells() {
     dmf::BlockSpec block{"start", 1,
                          {{"split", OperationType::Split,
                            {InputRef::entry(0)}, 2}},
-                         std::nullopt};
+                         {}};
     dmf::DynamicDag dag({"start", {{"start", std::move(block)}}});
     const auto instance = dag.activateStart({1});
     const auto split = dag.operationFor(instance, "split");

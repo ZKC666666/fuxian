@@ -22,14 +22,14 @@ dmf::Protocol branchingProtocol() {
         "start", 2,
         {{"mix", OperationType::Mix, {InputRef::entry(0), InputRef::entry(1)}, 1},
          {"detect", OperationType::Detect, {InputRef::output("mix")}, 1}},
-        dmf::DecisionSpec{"detect", {{"output", {"output", {0}}},
-                                     {"waste", {"waste", {0}}}}}};
+        {dmf::DecisionSpec{"detect", {{"output", {"output", {0}}},
+                                      {"waste", {"waste", {0}}}}}}};
     dmf::BlockSpec output{"output", 1,
                           {{"send", OperationType::Output, {InputRef::entry(0)}, 0}},
-                          std::nullopt};
+                          {}};
     dmf::BlockSpec waste{"waste", 1,
                          {{"discard", OperationType::Waste, {InputRef::entry(0)}, 0}},
-                         std::nullopt};
+                         {}};
     return {"start", {{"start", std::move(start)}, {"output", std::move(output)},
                       {"waste", std::move(waste)}}};
 }
@@ -161,7 +161,7 @@ void rejectsInvalidPorts() {
     dmf::BlockSpec terminal{"start", 1,
                             {{"send", OperationType::Output,
                               {dmf::InputRef::entry(0)}, 0}},
-                            std::nullopt};
+                            {}};
     dmf::DynamicDag terminal_dag({"start", {{"start", std::move(terminal)}}});
     const auto block = terminal_dag.activateStart({1});
     dmf::DropletPositions one_droplet{{1, {0, 0}}};

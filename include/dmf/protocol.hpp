@@ -2,7 +2,6 @@
 
 #include <cstddef>
 #include <map>
-#include <optional>
 #include <string>
 #include <vector>
 
@@ -44,7 +43,7 @@ struct BlockSpec {
     std::string id;
     std::size_t entry_count;
     std::vector<OperationSpec> operations;
-    std::optional<DecisionSpec> decision;
+    std::vector<DecisionSpec> decisions;
 };
 
 // CFG: possible block transitions. Each block contains its own fixed DAG.

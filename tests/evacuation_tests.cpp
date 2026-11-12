@@ -22,7 +22,7 @@ dmf::Protocol oneDetect() {
         "start", 1,
         {{"detect", dmf::OperationType::Detect,
           {dmf::InputRef::entry(0)}, 1}},
-        std::nullopt};
+        {}};
     return {"start", {{"start", std::move(block)}}};
 }
 
@@ -33,7 +33,7 @@ dmf::Protocol twoDetects() {
           {dmf::InputRef::entry(0)}, 1},
          {"far", dmf::OperationType::Detect,
           {dmf::InputRef::entry(1)}, 1}},
-        std::nullopt};
+        {}};
     return {"start", {{"start", std::move(block)}}};
 }
 

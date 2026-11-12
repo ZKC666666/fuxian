@@ -122,14 +122,17 @@ void DynamicDag::finishOperation(OperationInstanceId id, std::vector<DropletId> 
     }
 
     const auto& block_spec = protocol_.block(blocks_.at(instance.block_instance).spec_id);
-    const bool is_decision = block_spec.decision && block_spec.decision->operation == spec.id;
+    const auto decision = std::find_if(
+        block_spec.decisions.begin(), block_spec.decisions.end(),
+        [&](const DecisionSpec& candidate) { return candidate.operation == spec.id; });
+    const bool is_decision = decision != block_spec.decisions.end();
     if (is_decision != outcome.has_value()) {
         throw std::invalid_argument("decision outcome is missing or unexpected");
     }
     std::optional<PendingBranch> branch_to_add;
     if (is_decision) {
-        const auto selected = block_spec.decision->outcomes.find(*outcome);
-        if (selected == block_spec.decision->outcomes.end()) {
+        const auto selected = decision->outcomes.find(*outcome);
+        if (selected == decision->outcomes.end()) {
             throw std::invalid_argument("unknown decision outcome");
         }
         PendingBranch branch{selected->second.target_block, {}};

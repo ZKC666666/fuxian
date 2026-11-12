@@ -2,7 +2,7 @@
 
 本工程依据论文 [A Two-Layer Decoupled Synthesis Framework for Uncertain Biochemical Protocols on Active-Matrix Digital Microfluidic Platforms](https://doi.org/10.1109/TCAD.2026.3721419) 逐步复现。论文给出了框架和伪代码，没有公开完整实现与实验生成程序。工程使用 C++17，文档使用中文。
 
-当前 `main` 分支处于 **v1.0：主要操作类型组成完整协议仿真链**。每个正式版本都用 Git 标签保存；桌面的 `PROJECT/versions/版本号` 是可独立用 Visual Studio 打开的源码副本。此前可运行但简化较多的探索原型保存在 Git 标签 `v0.0-prototype`，不作为论文数值复现结果。
+当前 `main` 分支处于 **v1.1：两组并行操作各自检测、各自分流**。每个正式版本都用 Git 标签保存；桌面的 `PROJECT/versions/版本号` 是可独立用 Visual Studio 打开的源码副本。此前可运行但简化较多的探索原型保存在 Git 标签 `v0.0-prototype`，不作为论文数值复现结果。
 
 ## 先理解两个图
 
@@ -220,7 +220,7 @@ Split 的操作形状按论文提到的 `3×1` 例子配置，但当前 Placer �
 
 操作输出之前会检查新液滴之间、以及它们和其他液滴之间是否满足配置的安全距离。若入口或 Split 出口暂时没有安全空间，本步报告 `waiting_for_output_space`，操作继续等待。完成反馈只取一次并保存，下一步继续尝试释放同一批输出，避免重复申请液滴编号。Router 与上层的安全距离配置不一致时，控制循环会拒绝启动。已到输出口或废液口的液滴仍按 v0.6 的规则被消耗。
 
-默认 `am_dmf.exe` 在 **15×9** 阵列分别运行 `output` 与 `waste` 两种检测结果：
+v1.0 独立快照中的默认 `am_dmf.exe` 在 **15×9** 阵列分别运行 `output` 与 `waste` 两种检测结果；当前版本使用 `am_dmf.exe full` 运行同一演示：
 
 ```text
 source_a、source_b 两次 Dispense → Mix → Split
@@ -232,6 +232,29 @@ source_a、source_b 两次 Dispense → Mix → Split
 
 `dmf_full_protocol_tests.exe` 检查两种动态分支、两滴 Split 产物的位置和后续消费、入口被占用时的等待、同一入口不能同时用于两次 Dispense、输出安全空间不足时的等待与反馈复用、液滴编号不覆盖已有液滴，以及无效 Dispense/Split 输入输出数量。原有 v0.1～v0.9 的测试和演示保留。
 
+## v1.1 新增：两组检测分别决定后续操作
+
+论文的 Parallel Mixing with Branching 实验同时执行多组混合，每组检测后的液滴分别走 Output 或 Waste。v1.0 的 `BlockSpec` 只能保存一个 `DecisionSpec`，所以只能表达一组检测分支。v1.1 将其改为 `decisions` 列表：每个 Detect 有自己的结果和下一流程块，检测 A 完成后会把 A 的后续操作放入下一控制步；即使检测 B 仍在运行，也无需等待。dynamic DAG 原有的多条待激活分支队列接收这些结果。
+
+```text
+第 A 组：Dispense ×2 → Mix A → Detect A → Output / Waste
+第 B 组：Dispense ×2 → Mix B → Detect B → Output / Waste
+                              ↑ 两组分别按自己的检测结果分流
+```
+
+演示使用 `VirtualChip(4,2)`，对应 **27×15** 阵列和 8 个可选虚拟模块；A 组入口 `(0,1)`、`(0,7)`，B 组入口 `(26,7)`、`(26,13)`，Output 口 `(26,0)`，Waste 口 `(0,14)`。这些位置、操作时长和反馈结果均是工程假设。两个检测决定可以激活同名的 Output 或 Waste 流程块，但每次激活都是独立实例，不会混用液滴。共享终点时液滴需要遵守安全距离。
+
+| A 组结果 | B 组结果 | 本工程示例完成步数 |
+| --- | --- | ---: |
+| Output | Output | 77 |
+| Output | Waste | 89 |
+| Waste | Output | 65 |
+| Waste | Waste | 77 |
+
+默认运行 `am_dmf.exe` 会依次打印四种结果的摘要；`am_dmf.exe parallel-ow` 等模式会打印每一步的移动、操作开始/完成、分支激活。`parallel-oo`、`parallel-wo`、`parallel-ww` 分别对应另外三种结果。在 Output/Waste 示例中，A 组 Detect 于第 16 步完成，第 17 步激活自己的 Output 流程；B 组的 Mix 到第 56 步才启动。这说明 A 的分支没有被 B 的进度挡住。`dmf_parallel_branch_tests.exe` 检查四种结果、液滴安全距离、两个检测同一步完成、分支相互独立，以及错误决策配置被拒绝。
+
+摘要里的 `loop time avg/max` 是单个控制步执行 `ExecutionLoop::step()` 的平均/最长墙钟时间，包含本示例的反馈函数，不含控制台输出；数值随机器与系统调度变化。它不能直接对比论文的 Python 决策时间。当前虚拟阵列规则也不能直接生成论文 Table I 的 30×30、60×60 布局，协议规模和输入生成规则尚未对齐；上表只是本工程可重复的小规模功能实验。Router 在其他布局中仍可能出现长时间绕行，不能由本例推出普遍的完成保证。
+
 ## 编译与运行
 
 需要 C++17 编译器和 CMake。在已配置好编译器的终端中执行：
@@ -242,10 +265,12 @@ cmake --build build --config Debug
 ctest --test-dir build -C Debug --output-on-failure
 ```
 
-演示程序不填参数时运行 v1.0 的两条完整协议分支；`full-output`、`full-waste` 分别只运行一条。`crossing` 保留 v0.9 的提前转移演示，`async` 保留 v0.8 的异步代价场演示，`evacuation` 保留 v0.7 的撤离演示，`protocol` 保留 v0.6 的旧协议演示；其余旧入口也保留。使用 Visual Studio 多配置生成器时，例如：
+演示程序不填参数时运行 v1.1 的四种并行检测结果；`full` 保留 v1.0 的两条完整协议分支，`full-output`、`full-waste` 分别只运行一条。`crossing` 保留 v0.9 的提前转移演示，`async` 保留 v0.8 的异步代价场演示，`evacuation` 保留 v0.7 的撤离演示，`protocol` 保留 v0.6 的旧协议演示；其余旧入口也保留。使用 Visual Studio 多配置生成器时，例如：
 
 ```powershell
 .\build\Debug\am_dmf.exe
+.\build\Debug\am_dmf.exe parallel-ow
+.\build\Debug\am_dmf.exe full
 .\build\Debug\am_dmf.exe full-output
 .\build\Debug\am_dmf.exe full-waste
 .\build\Debug\am_dmf.exe crossing
@@ -264,15 +289,16 @@ ctest --test-dir build -C Debug --output-on-failure
 .\build\Debug\dmf_async_cost_field_tests.exe
 .\build\Debug\dmf_crossing_tests.exe
 .\build\Debug\dmf_full_protocol_tests.exe
+.\build\Debug\dmf_parallel_branch_tests.exe
 .\build\Debug\dmf_field_benchmark.exe
 ```
 
-若使用单配置生成器，可执行文件通常位于构建目录下。在 Visual Studio 中通过“文件 → 打开 → 文件夹”打开 `PROJECT/versions/v1.0`，等待 CMake 配置完成。选择绿色运行按钮旁的 `am_dmf.exe` 并按 Ctrl+F5，可依次看到两条分支；选择 `dmf_full_protocol_tests.exe` 可看到 `full protocol tests: passed`。版本文件夹包含完整源码和 `CMakeLists.txt`，不依赖主工程的构建结果。
+若使用单配置生成器，可执行文件通常位于构建目录下。在 Visual Studio 中通过“文件 → 打开 → 文件夹”打开 `PROJECT/versions/v1.1`，等待 CMake 配置完成。选择绿色运行按钮旁的 `am_dmf.exe` 并按 Ctrl+F5，可看到四种并行结果的摘要；选择 `dmf_parallel_branch_tests.exe` 可看到 `parallel branch tests: passed`。若想逐步查看 Output/Waste 这一组，在终端中运行 `am_dmf.exe parallel-ow`。旧 `PROJECT/versions/v1.0` 文件夹仍保持独立，默认运行它的 `am_dmf.exe` 会显示 v1.0 的两条分支。v1.1 改动了公共协议结构，请让 Visual Studio 为 v1.1 文件夹重新配置和编译，不要把旧构建目录中的测试程序与新库混用。
 
 ## 当前边界与后续步骤
 
-v0.6 已将 Mix、Detect、Output、Waste 贯穿到同一次仿真；v0.7 新增对**提前预告的操作区域**进行安全撤离；v0.8 对已有目标在障碍变化后的代价场重算使用单个后台线程；v0.9 能在区域启用前识别并处理目标被隔断的液滴；v1.0 让 Dispense、Split 也加入同一次协议仿真。入口、操作时长、分裂产物位置及部分路由与撤离规则是工程假设。**还没有**自动更换不可行操作区域、未预告障碍困住液滴时的完整处理，也没有论文实验所用的大规模基准和对照结果。当前实现不生成真实电极驱动序列。
+v0.6 已将 Mix、Detect、Output、Waste 贯穿到同一次仿真；v0.7 新增对**提前预告的操作区域**进行安全撤离；v0.8 对已有目标在障碍变化后的代价场重算使用单个后台线程；v0.9 能在区域启用前识别并处理目标被隔断的液滴；v1.0 让 Dispense、Split 也加入同一次协议仿真；v1.1 支持同一流程块的多个独立检测决定。入口、操作时长、分裂产物位置及部分路由与撤离规则是工程假设。**还没有**自动更换不可行操作区域、未预告障碍困住液滴时的完整处理，也没有论文实验所用的大规模基准和对照结果。当前实现不生成真实电极驱动序列。
 
 论文没有精确规定所有周期内事件的先后边界。当前固定为“本步完成的操作，其输出液滴和检测分支从下一步开始可用”；这是工程假设。`ExecutionLoop` 默认使用理想移动反馈，v0.5 允许注入失败或成功的位置反馈，但尚未接硬件反馈入口。
 
-下一步计划整理论文测试协议、实验参数与统计指标，建立可重复的对照实验，再决定未预告障碍与无法释放输出时的进一步调度规则；PIBT 改进在原论文版本稳定后单独开展。每个完成版本都同时保存 GitHub 标签和 `PROJECT/versions/版本号` 的源码副本。
+下一步计划对齐论文测试协议、阵列尺寸、实验参数与统计指标，建立可重复的对照实验，再决定未预告障碍与无法释放输出时的进一步调度规则；PIBT 改进在原论文版本稳定后单独开展。每个完成版本都同时保存 GitHub 标签和 `PROJECT/versions/版本号` 的源码副本。

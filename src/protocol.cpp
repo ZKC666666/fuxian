@@ -91,29 +91,37 @@ void Protocol::validate() const {
             throw std::invalid_argument("operation DAG contains a cycle in block: " + block_id);
         }
 
-        if (!block_spec.decision) continue;
-        const auto decision = operations.find(block_spec.decision->operation);
-        if (decision == operations.end() || decision->second->type != OperationType::Detect) {
-            throw std::invalid_argument("decision must refer to a detect operation");
-        }
-        if (block_spec.decision->outcomes.empty()) {
-            throw std::invalid_argument("decision has no outcomes");
-        }
-        for (const auto& [outcome, branch] : block_spec.decision->outcomes) {
-            if (outcome.empty()) throw std::invalid_argument("empty decision outcome");
-            const auto target = blocks.find(branch.target_block);
-            if (target == blocks.end()) throw std::invalid_argument("decision target is missing");
-            if (branch.entry_output_indices.size() != target->second.entry_count) {
-                throw std::invalid_argument("decision does not supply target block entries");
+        std::set<std::string> decided_operations;
+        for (const auto& decision : block_spec.decisions) {
+            const auto operation = operations.find(decision.operation);
+            if (operation == operations.end() ||
+                operation->second->type != OperationType::Detect) {
+                throw std::invalid_argument("decision must refer to a detect operation");
             }
-            const std::set<std::size_t> unique_outputs(branch.entry_output_indices.begin(),
-                                                        branch.entry_output_indices.end());
-            if (unique_outputs.size() != branch.entry_output_indices.size()) {
-                throw std::invalid_argument("one droplet cannot fill two block entries");
+            if (!decided_operations.insert(decision.operation).second) {
+                throw std::invalid_argument("detect operation has duplicate decisions");
             }
-            for (const auto index : branch.entry_output_indices) {
-                if (index >= decision->second->output_count) {
-                    throw std::invalid_argument("decision output index is out of range");
+            if (decision.outcomes.empty()) {
+                throw std::invalid_argument("decision has no outcomes");
+            }
+            for (const auto& [outcome, branch] : decision.outcomes) {
+                if (outcome.empty()) throw std::invalid_argument("empty decision outcome");
+                const auto target = blocks.find(branch.target_block);
+                if (target == blocks.end()) {
+                    throw std::invalid_argument("decision target is missing");
+                }
+                if (branch.entry_output_indices.size() != target->second.entry_count) {
+                    throw std::invalid_argument("decision does not supply target block entries");
+                }
+                const std::set<std::size_t> unique_outputs(
+                    branch.entry_output_indices.begin(), branch.entry_output_indices.end());
+                if (unique_outputs.size() != branch.entry_output_indices.size()) {
+                    throw std::invalid_argument("one droplet cannot fill two block entries");
+                }
+                for (const auto index : branch.entry_output_indices) {
+                    if (index >= operation->second->output_count) {
+                        throw std::invalid_argument("decision output index is out of range");
+                    }
                 }
             }
         }

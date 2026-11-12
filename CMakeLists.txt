@@ -12,7 +12,7 @@ target_include_directories(dmf_core PUBLIC include)
 find_package(Threads REQUIRED)
 target_link_libraries(dmf_core PUBLIC Threads::Threads)
 
-add_executable(am_dmf src/main.cpp)
+add_executable(am_dmf src/main.cpp src/parallel_protocol_demo.cpp)
 target_link_libraries(am_dmf PRIVATE dmf_core)
 
 add_executable(dmf_custom_route src/custom_route.cpp src/custom_route_case.cpp)
@@ -47,6 +47,9 @@ target_link_libraries(dmf_crossing_tests PRIVATE dmf_core)
 add_executable(dmf_full_protocol_tests tests/full_protocol_tests.cpp)
 target_link_libraries(dmf_full_protocol_tests PRIVATE dmf_core)
 
+add_executable(dmf_parallel_branch_tests tests/parallel_branch_tests.cpp)
+target_link_libraries(dmf_parallel_branch_tests PRIVATE dmf_core)
+
 add_executable(dmf_field_benchmark benchmarks/field_update_benchmark.cpp)
 target_link_libraries(dmf_field_benchmark PRIVATE dmf_core)
 
@@ -54,7 +57,8 @@ foreach(target dmf_core am_dmf dmf_custom_route dmf_runtime_tests
                dmf_placement_tests dmf_router_tests dmf_execution_tests
                dmf_protocol_execution_tests dmf_evacuation_tests
                dmf_async_cost_field_tests dmf_crossing_tests
-               dmf_full_protocol_tests dmf_field_benchmark)
+               dmf_full_protocol_tests dmf_parallel_branch_tests
+               dmf_field_benchmark)
   if(MSVC)
     target_compile_options(${target} PRIVATE /W4 /permissive- /EHsc)
   else()
@@ -72,7 +76,9 @@ add_test(NAME evacuation_tests COMMAND dmf_evacuation_tests)
 add_test(NAME async_cost_field_tests COMMAND dmf_async_cost_field_tests)
 add_test(NAME crossing_tests COMMAND dmf_crossing_tests)
 add_test(NAME full_protocol_tests COMMAND dmf_full_protocol_tests)
-add_test(NAME full_protocol_demo COMMAND am_dmf)
+add_test(NAME parallel_branch_tests COMMAND dmf_parallel_branch_tests)
+add_test(NAME full_protocol_demo COMMAND am_dmf full)
+add_test(NAME parallel_demo COMMAND am_dmf parallel)
 add_test(NAME crossing_demo COMMAND am_dmf crossing)
 add_test(NAME async_demo COMMAND am_dmf async)
 add_test(NAME evacuation_demo COMMAND am_dmf evacuation)

@@ -20,7 +20,7 @@ dmf::Protocol crossingProtocol() {
           {dmf::InputRef::entry(0)}, 1},
          {"send", dmf::OperationType::Output,
           {dmf::InputRef::entry(1)}, 0}},
-        std::nullopt};
+        {}};
     return {"start", {{"start", std::move(block)}}};
 }
 

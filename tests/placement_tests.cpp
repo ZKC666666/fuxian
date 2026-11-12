@@ -29,7 +29,7 @@ dmf::Protocol mixThenDetect() {
         "start", 2,
         {{"mix", OperationType::Mix, {InputRef::entry(0), InputRef::entry(1)}, 1},
          {"detect", OperationType::Detect, {InputRef::output("mix")}, 1}},
-        std::nullopt};
+        {}};
     return {"start", {{"start", std::move(block)}}};
 }
 
@@ -90,7 +90,7 @@ void occupiedModuleDefersAnotherOperation() {
         "start", 4,
         {{"first", OperationType::Mix, {InputRef::entry(0), InputRef::entry(1)}, 1},
          {"second", OperationType::Mix, {InputRef::entry(2), InputRef::entry(3)}, 1}},
-        std::nullopt};
+        {}};
     dmf::DynamicDag dag({"start", {{"start", std::move(block)}}});
     const auto start = dag.activateStart({1, 2, 3, 4});
     const auto first = dag.operationFor(start, "first");
@@ -123,7 +123,7 @@ void sharedDropletIsReservedOnce() {
         "start", 1,
         {{"first", OperationType::Detect, {InputRef::entry(0)}, 1},
          {"second", OperationType::Detect, {InputRef::entry(0)}, 1}},
-        std::nullopt};
+        {}};
     dmf::DynamicDag dag({"start", {{"start", std::move(block)}}});
     const auto start = dag.activateStart({1});
     const auto first = dag.operationFor(start, "first");

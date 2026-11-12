@@ -23,7 +23,7 @@ dmf::Protocol parallelProtocol() {
         "start", 2,
         {{"near", OperationType::Detect, {InputRef::entry(0)}, 1},
          {"far", OperationType::Detect, {InputRef::entry(1)}, 1}},
-        std::nullopt};
+        {}};
     return {"start", {{"start", std::move(block)}}};
 }
 
@@ -34,7 +34,7 @@ dmf::Protocol dependentProtocol() {
         "start", 1,
         {{"first", OperationType::Detect, {InputRef::entry(0)}, 1},
          {"second", OperationType::Detect, {InputRef::output("first")}, 1}},
-        std::nullopt};
+        {}};
     return {"start", {{"start", std::move(block)}}};
 }
 

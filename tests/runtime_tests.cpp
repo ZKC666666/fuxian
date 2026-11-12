@@ -35,14 +35,14 @@ dmf::Protocol branchingProtocol() {
         "start", 2,
         {{"mix", OperationType::Mix, {InputRef::entry(0), InputRef::entry(1)}, 1},
          {"detect", OperationType::Detect, {InputRef::output("mix")}, 1}},
-        dmf::DecisionSpec{"detect", {{"output", {"output", {0}}},
-                                     {"waste", {"waste", {0}}}}}};
+        {dmf::DecisionSpec{"detect", {{"output", {"output", {0}}},
+                                      {"waste", {"waste", {0}}}}}}};
     dmf::BlockSpec output{"output", 1,
                           {{"send", OperationType::Output, {InputRef::entry(0)}, 0}},
-                          std::nullopt};
+                          {}};
     dmf::BlockSpec waste{"waste", 1,
                          {{"discard", OperationType::Waste, {InputRef::entry(0)}, 0}},
-                         std::nullopt};
+                         {}};
     return {"start", {{"start", std::move(start)}, {"output", std::move(output)},
                       {"waste", std::move(waste)}}};
 }
@@ -96,11 +96,11 @@ void repeatedBlockGetsNewOperationIds() {
     dmf::BlockSpec check_block{
         "check", 1,
         {{"detect", OperationType::Detect, {InputRef::entry(0)}, 1}},
-        dmf::DecisionSpec{"detect", {{"retry", {"check", {0}}},
-                                     {"finish", {"done", {0}}}}}};
+        {dmf::DecisionSpec{"detect", {{"retry", {"check", {0}}},
+                                      {"finish", {"done", {0}}}}}}};
     dmf::BlockSpec done{"done", 1,
                         {{"send", OperationType::Output, {InputRef::entry(0)}, 0}},
-                        std::nullopt};
+                        {}};
     dmf::DynamicDag dag({"check", {{"check", std::move(check_block)},
                                    {"done", std::move(done)}}});
 
@@ -138,13 +138,13 @@ void invalidGraphsAreRejected() {
         "cycle", 0,
         {{"a", OperationType::Mix, {InputRef::output("b")}, 1},
          {"b", OperationType::Mix, {InputRef::output("a")}, 1}},
-        std::nullopt};
+        {}};
     rejects<std::invalid_argument>(
         [&] { dmf::DynamicDag dag({"cycle", {{"cycle", cyclic}}}); },
         "cyclic block DAG was accepted");
 
     auto protocol = branchingProtocol();
-    protocol.blocks.at("start").decision->outcomes.at("output").target_block = "missing";
+    protocol.blocks.at("start").decisions.front().outcomes.at("output").target_block = "missing";
     rejects<std::invalid_argument>([&] { dmf::DynamicDag dag(protocol); },
                                    "missing CFG target was accepted");
 
@@ -163,7 +163,7 @@ void oneDropletCannotStartTwoOperations() {
         "start", 1,
         {{"first", OperationType::Output, {InputRef::entry(0)}, 0},
          {"second", OperationType::Waste, {InputRef::entry(0)}, 0}},
-        std::nullopt};
+        {}};
     dmf::DynamicDag dag({"start", {{"start", std::move(block)}}});
     const auto start = dag.activateStart({1});
     const auto first = dag.operationFor(start, "first");

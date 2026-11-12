@@ -2,6 +2,7 @@
 #include "dmf/execution_loop.hpp"
 #include "dmf/router.hpp"
 #include "dmf/upper_layer.hpp"
+#include "parallel_protocol_demo.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -21,14 +22,14 @@ dmf::Protocol exampleProtocol() {
         "start", 2,
         {{"mix", OperationType::Mix, {InputRef::entry(0), InputRef::entry(1)}, 1},
          {"detect", OperationType::Detect, {InputRef::output("mix")}, 1}},
-        dmf::DecisionSpec{"detect", {{"output", {"output", {0}}},
-                                     {"waste", {"waste", {0}}}}}};
+        {dmf::DecisionSpec{"detect", {{"output", {"output", {0}}},
+                                      {"waste", {"waste", {0}}}}}}};
     dmf::BlockSpec output{"output", 1,
                           {{"send", OperationType::Output, {InputRef::entry(0)}, 0}},
-                          std::nullopt};
+                          {}};
     dmf::BlockSpec waste{"waste", 1,
                          {{"discard", OperationType::Waste, {InputRef::entry(0)}, 0}},
-                         std::nullopt};
+                         {}};
     return {"start", {{"start", std::move(start)}, {"output", std::move(output)},
                       {"waste", std::move(waste)}}};
 }
@@ -46,16 +47,16 @@ dmf::Protocol completeProtocol() {
          {"detect", OperationType::Detect, {InputRef::output("split", 0)}, 1},
          {"discard_second", OperationType::Waste,
           {InputRef::output("split", 1)}, 0}},
-        dmf::DecisionSpec{"detect", {{"output", {"output", {0}}},
-                                     {"waste", {"waste", {0}}}}}};
+        {dmf::DecisionSpec{"detect", {{"output", {"output", {0}}},
+                                      {"waste", {"waste", {0}}}}}}};
     dmf::BlockSpec output{
         "output", 1,
         {{"send", OperationType::Output, {InputRef::entry(0)}, 0}},
-        std::nullopt};
+        {}};
     dmf::BlockSpec waste{
         "waste", 1,
         {{"discard", OperationType::Waste, {InputRef::entry(0)}, 0}},
-        std::nullopt};
+        {}};
     return {"start", {{"start", std::move(start)},
                       {"output", std::move(output)},
                       {"waste", std::move(waste)}}};
@@ -247,7 +248,7 @@ dmf::Protocol placementProtocol() {
         "start", 2,
         {{"mix", OperationType::Mix, {InputRef::entry(0), InputRef::entry(1)}, 1},
          {"detect", OperationType::Detect, {InputRef::output("mix")}, 1}},
-        std::nullopt};
+        {}};
     return {"start", {{"start", std::move(block)}}};
 }
 
@@ -353,7 +354,7 @@ dmf::Protocol timedProtocol() {
         "start", 2,
         {{"near", OperationType::Detect, {InputRef::entry(0)}, 1},
          {"far", OperationType::Detect, {InputRef::entry(1)}, 1}},
-        std::nullopt};
+        {}};
     return {"start", {{"start", std::move(block)}}};
 }
 
@@ -362,7 +363,7 @@ void runEvacuationExample() {
     dmf::BlockSpec block{
         "start", 1,
         {{"detect", OperationType::Detect, {dmf::InputRef::entry(0)}, 1}},
-        std::nullopt};
+        {}};
     dmf::DynamicDag dag({"start", {{"start", std::move(block)}}});
     const auto start = dag.activateStart({1});
     const auto detect = dag.operationFor(start, "detect");
@@ -415,7 +416,7 @@ void runCrossingExample() {
         "start", 2,
         {{"detect", OperationType::Detect, {InputRef::entry(0)}, 1},
          {"send", OperationType::Output, {InputRef::entry(1)}, 0}},
-        std::nullopt};
+        {}};
     dmf::DynamicDag dag({"start", {{"start", std::move(block)}}});
     const auto instance = dag.activateStart({1, 2});
     const auto detect = dag.operationFor(instance, "detect");
@@ -600,19 +601,34 @@ void runTimedExample(TimedExample example) {
 }  // namespace
 
 int main(int argc, char** argv) {
-    const std::string mode = argc == 1 ? "full" : (argc == 2 ? argv[1] : "");
-    if (mode != "full" && mode != "full-output" && mode != "full-waste" &&
+    const std::string mode = argc == 1 ? "parallel" : (argc == 2 ? argv[1] : "");
+    if (mode != "parallel" && mode != "parallel-oo" && mode != "parallel-ow" &&
+        mode != "parallel-wo" && mode != "parallel-ww" &&
+        mode != "full" && mode != "full-output" && mode != "full-waste" &&
         mode != "crossing" && mode != "async" && mode != "evacuation" && mode != "protocol" &&
         mode != "protocol-output" && mode != "protocol-waste" &&
         mode != "detour" && mode != "timed" && mode != "router" &&
         mode != "placement" && mode != "output" && mode != "waste") {
-        std::cerr << "usage: am_dmf [full|full-output|full-waste|crossing|async|evacuation|"
+        std::cerr << "usage: am_dmf [parallel|parallel-oo|parallel-ow|parallel-wo|parallel-ww|"
+                     "full|full-output|full-waste|crossing|async|evacuation|"
                      "protocol|protocol-output|protocol-waste|"
                      "detour|timed|router|placement|output|waste]\n";
         return 2;
     }
     try {
-        if (mode == "full") {
+        if (mode == "parallel") {
+            for (const std::string& first : {"output", "waste"}) {
+                for (const std::string& second : {"output", "waste"}) {
+                    dmf::demo::runParallelProtocol(first, second, false);
+                }
+            }
+        } else if (mode == "parallel-oo" || mode == "parallel-ow" ||
+                   mode == "parallel-wo" || mode == "parallel-ww") {
+            const auto outcome = [](char code) {
+                return code == 'o' ? "output" : "waste";
+            };
+            dmf::demo::runParallelProtocol(outcome(mode[9]), outcome(mode[10]), true);
+        } else if (mode == "full") {
             runCompleteProtocol("output");
             std::cout << '\n';
             runCompleteProtocol("waste");
