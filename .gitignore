@@ -1,5 +1,8 @@
 build/
 build-ninja/
+build-v1.2-check/
+build-v1.2-release/
+build-v1.2-snapshot-check/
 out/
 .vs/
 .agents/

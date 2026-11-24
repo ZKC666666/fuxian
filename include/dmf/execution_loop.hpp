@@ -20,6 +20,7 @@ struct StepReport {
     int step = 0;
     std::vector<BlockInstanceId> activated_blocks;
     std::vector<RoutingTask> routing_tasks;
+    std::vector<RouteArrival> route_arrivals;
     std::vector<MoveCommand> moves;
     std::vector<MoveFeedback> observed;
     std::map<DropletId, Point> evacuation_targets;

@@ -86,8 +86,9 @@ void printStep(const StepReport& report, const DynamicDag& dag,
 
 }  // namespace
 
-void runParallelProtocol(const std::string& first_outcome,
-                         const std::string& second_outcome, bool trace) {
+ExperimentSummary runParallelProtocol(const std::string& first_outcome,
+                                      const std::string& second_outcome,
+                                      bool trace, bool print_summary) {
     if ((first_outcome != "output" && first_outcome != "waste") ||
         (second_outcome != "output" && second_outcome != "waste")) {
         throw std::invalid_argument("unknown parallel protocol outcome");
@@ -111,12 +112,9 @@ void runParallelProtocol(const std::string& first_outcome,
                            return feedbackFor(dag.operation(operation),
                                               first_outcome, second_outcome);
                        });
+    ExperimentMetrics metrics(chip.width(), chip.height(), router.minimumSeparation());
 
     using Clock = std::chrono::steady_clock;
-    long long total_microseconds = 0;
-    long long peak_microseconds = 0;
-    int steps = 0;
-    int output_wait_steps = 0;
     if (trace) {
         std::cout << "chip=" << chip.width() << 'x' << chip.height()
                   << "; group A=" << first_outcome
@@ -127,22 +125,30 @@ void runParallelProtocol(const std::string& first_outcome,
         const auto report = loop.step();
         const auto duration = std::chrono::duration_cast<std::chrono::microseconds>(
             Clock::now() - start).count();
-        total_microseconds += duration;
-        peak_microseconds = std::max(peak_microseconds, duration);
-        steps = report.step;
-        if (!report.waiting_for_output_space.empty()) ++output_wait_steps;
+        metrics.observe(report, positions, duration);
         if (trace) printStep(report, dag, first_outcome, second_outcome);
     }
-    if (!loop.allDone() || !positions.empty() || dag.blockCount() != 3) {
+    if (!loop.allDone()) {
+        throw ExperimentTimeout("parallel protocol exceeded 250 steps");
+    }
+    if (!positions.empty() || dag.blockCount() != 3) {
         throw std::runtime_error("parallel protocol did not finish cleanly");
     }
-    std::cout << "A=" << first_outcome << ", B=" << second_outcome
-              << ": completed=true, steps=" << steps
-              << ", droplets remaining=" << positions.size()
-              << ", blocks=" << dag.blockCount()
-              << ", output wait steps=" << output_wait_steps
-              << ", loop time avg/max (microseconds, excluding output)="
-              << total_microseconds / steps << '/' << peak_microseconds << '\n';
+    const auto result = metrics.summary();
+    if (result.route_requests != result.route_arrivals) {
+        throw std::logic_error("completed protocol has unfinished routing requests");
+    }
+    if (print_summary) {
+        std::cout << "A=" << first_outcome << ", B=" << second_outcome
+                  << ": completed=true, steps=" << result.steps
+                  << ", droplets remaining=" << positions.size()
+                  << ", blocks=" << dag.blockCount()
+                  << ", output wait steps=" << result.output_wait_steps
+                  << ", loop time avg/max (microseconds, excluding output)="
+                  << result.loop_microseconds / result.steps << '/'
+                  << result.loop_peak_microseconds << '\n';
+    }
+    return result;
 }
 
 }  // namespace dmf::demo

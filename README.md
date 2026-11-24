@@ -2,7 +2,7 @@
 
 本工程依据论文 [A Two-Layer Decoupled Synthesis Framework for Uncertain Biochemical Protocols on Active-Matrix Digital Microfluidic Platforms](https://doi.org/10.1109/TCAD.2026.3721419) 逐步复现。论文给出了框架和伪代码，没有公开完整实现与实验生成程序。工程使用 C++17，文档使用中文。
 
-当前 `main` 分支处于 **v1.1：两组并行操作各自检测、各自分流**。每个正式版本都用 Git 标签保存；桌面的 `PROJECT/versions/版本号` 是可独立用 Visual Studio 打开的源码副本。此前可运行但简化较多的探索原型保存在 Git 标签 `v0.0-prototype`，不作为论文数值复现结果。
+当前 `main` 分支处于 **v1.2：可重复运行的小规模仿真验证**。每个正式版本都用 Git 标签保存；桌面的 `PROJECT/versions/版本号` 是可独立用 Visual Studio 打开的源码副本。此前可运行但简化较多的探索原型保存在 Git 标签 `v0.0-prototype`，不作为论文数值复现结果。
 
 ## 先理解两个图
 
@@ -255,6 +255,32 @@ source_a、source_b 两次 Dispense → Mix → Split
 
 摘要里的 `loop time avg/max` 是单个控制步执行 `ExecutionLoop::step()` 的平均/最长墙钟时间，包含本示例的反馈函数，不含控制台输出；数值随机器与系统调度变化。它不能直接对比论文的 Python 决策时间。当前虚拟阵列规则也不能直接生成论文 Table I 的 30×30、60×60 布局，协议规模和输入生成规则尚未对齐；上表只是本工程可重复的小规模功能实验。Router 在其他布局中仍可能出现长时间绕行，不能由本例推出普遍的完成保证。
 
+## v1.2 新增：逐次实验记录与安全核对
+
+v1.2 复用 v1.1 的两组并行协议，不改变选址和 Router 的决策规则。`dmf_parallel_experiments.exe` 对四种检测结果各运行 5 次，默认在程序当前工作目录生成 `experiment_trials.csv`（20 行逐次结果）和 `experiment_summary.csv`（4 行汇总）。也可以在命令行给出两个不同的输出文件路径。每一次都从空白仿真重新开始；若超出 250 步或执行报错，该次会保留为 `timeout` 或 `failed`，不会进入成功运行的步数均值。
+
+| 固定参数 | 本工程试验设置 |
+| --- | --- |
+| 阵列、虚拟模块 | `VirtualChip(4,2)`，27×15、8 个可选模块 |
+| 安全距离 | Chebyshev 距离至少 2 |
+| 入口 | A 组 `(0,1)`、`(0,7)`；B 组 `(26,7)`、`(26,13)` |
+| 端口 | Output `(26,0)`；Waste `(0,14)` |
+| 操作时长 | Dispense 1 步、Mix 3 步、Detect 2 步；终点操作 1 步 |
+| 分支 | Output/Output、Output/Waste、Waste/Output、Waste/Waste |
+| 随机种子 | `none`：这四个案例没有随机输入；异步线程调度仍可能影响耗时 |
+
+每一步结束后，记录器检查液滴没有越界、液滴之间满足安全距离，并要求控制步编号连续。`route_requests` 是本步新下发的路由任务数；`route_arrivals` 取自 Router 确认的到达事件，不把任务下发误当成完成。`throughput = route_arrivals / steps`，只描述这个有限协议案例；它**不能替代**论文连续产生路由任务的吞吐量实验。正常结束还会核对所有请求均有到达事件、没有剩余液滴、三个流程块全部完成。
+
+CSV 中 `plan_step_*_us` 只计 `Router::planStep()` 的计算时间；`loop_*_us` 计整个 `ExecutionLoop::step()`，包含上层、障碍更新、连通性检查及仿真反馈，不包含控制台输出和实验记录器检查。两种计时口径都不是论文 Python 实现的 DecT 数值。CSV 中失败运行的数值格留空，汇总保留失败次数；若某分支全部失败，其均值也留空。
+
+可在 PowerShell 中从工程目录运行：
+
+```powershell
+.\build\Debug\dmf_parallel_experiments.exe experiment_trials.csv experiment_summary.csv
+```
+
+在 Visual Studio 打开 `PROJECT/versions/v1.2` 后，选择启动项 `dmf_parallel_experiments.exe` 并按 Ctrl+F5；控制台会显示两个 CSV 文件名。文件保存位置是 Visual Studio 为该启动项设置的**工作目录**，可通过给可执行文件传入两个完整路径来指定位置。本版本只建立可靠的记录口径和小规模检查；论文的 30×30、60×60 协议生成、Router 大规模任务流和对照算法尚待后续版本。
+
 ## 编译与运行
 
 需要 C++17 编译器和 CMake。在已配置好编译器的终端中执行：
@@ -291,14 +317,15 @@ ctest --test-dir build -C Debug --output-on-failure
 .\build\Debug\dmf_full_protocol_tests.exe
 .\build\Debug\dmf_parallel_branch_tests.exe
 .\build\Debug\dmf_field_benchmark.exe
+.\build\Debug\dmf_parallel_experiments.exe
 ```
 
-若使用单配置生成器，可执行文件通常位于构建目录下。在 Visual Studio 中通过“文件 → 打开 → 文件夹”打开 `PROJECT/versions/v1.1`，等待 CMake 配置完成。选择绿色运行按钮旁的 `am_dmf.exe` 并按 Ctrl+F5，可看到四种并行结果的摘要；选择 `dmf_parallel_branch_tests.exe` 可看到 `parallel branch tests: passed`。若想逐步查看 Output/Waste 这一组，在终端中运行 `am_dmf.exe parallel-ow`。旧 `PROJECT/versions/v1.0` 文件夹仍保持独立，默认运行它的 `am_dmf.exe` 会显示 v1.0 的两条分支。v1.1 改动了公共协议结构，请让 Visual Studio 为 v1.1 文件夹重新配置和编译，不要把旧构建目录中的测试程序与新库混用。
+若使用单配置生成器，可执行文件通常位于构建目录下。在 Visual Studio 中通过“文件 → 打开 → 文件夹”打开 `PROJECT/versions/v1.2`，等待 CMake 配置完成。选择绿色运行按钮旁的 `am_dmf.exe` 并按 Ctrl+F5，可看到四种并行结果的摘要；选择 `dmf_parallel_experiments.exe` 可生成两份 CSV；选择 `dmf_experiment_metrics_tests.exe` 可检查统计与安全规则。若想逐步查看 Output/Waste 这一组，在终端中运行 `am_dmf.exe parallel-ow`。旧版本文件夹保持独立；请让 Visual Studio 为 v1.2 文件夹重新配置和编译，不要把旧构建目录中的测试程序与新库混用。
 
 ## 当前边界与后续步骤
 
-v0.6 已将 Mix、Detect、Output、Waste 贯穿到同一次仿真；v0.7 新增对**提前预告的操作区域**进行安全撤离；v0.8 对已有目标在障碍变化后的代价场重算使用单个后台线程；v0.9 能在区域启用前识别并处理目标被隔断的液滴；v1.0 让 Dispense、Split 也加入同一次协议仿真；v1.1 支持同一流程块的多个独立检测决定。入口、操作时长、分裂产物位置及部分路由与撤离规则是工程假设。**还没有**自动更换不可行操作区域、未预告障碍困住液滴时的完整处理，也没有论文实验所用的大规模基准和对照结果。当前实现不生成真实电极驱动序列。
+v0.6 已将 Mix、Detect、Output、Waste 贯穿到同一次仿真；v0.7 新增对**提前预告的操作区域**进行安全撤离；v0.8 对已有目标在障碍变化后的代价场重算使用单个后台线程；v0.9 能在区域启用前识别并处理目标被隔断的液滴；v1.0 让 Dispense、Split 也加入同一次协议仿真；v1.1 支持同一流程块的多个独立检测决定；v1.2 给这四种小规模案例增加了逐次统计和安全核对。入口、操作时长、分裂产物位置及部分路由与撤离规则是工程假设。**还没有**自动更换不可行操作区域、未预告障碍困住液滴时的完整处理，也没有论文实验所用的大规模基准和对照结果。当前实现不生成真实电极驱动序列。
 
 论文没有精确规定所有周期内事件的先后边界。当前固定为“本步完成的操作，其输出液滴和检测分支从下一步开始可用”；这是工程假设。`ExecutionLoop` 默认使用理想移动反馈，v0.5 允许注入失败或成功的位置反馈，但尚未接硬件反馈入口。
 
-下一步计划对齐论文测试协议、阵列尺寸、实验参数与统计指标，建立可重复的对照实验，再决定未预告障碍与无法释放输出时的进一步调度规则；PIBT 改进在原论文版本稳定后单独开展。每个完成版本都同时保存 GitHub 标签和 `PROJECT/versions/版本号` 的源码副本。
+下一步计划对齐论文测试协议、阵列尺寸和实验参数，建立对照算法及大规模案例，再决定未预告障碍与无法释放输出时的进一步调度规则；PIBT 改进在原论文版本稳定后单独开展。每个完成版本都同时保存 GitHub 标签和 `PROJECT/versions/版本号` 的源码副本。

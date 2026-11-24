@@ -39,6 +39,7 @@ void ExecutionLoop::recordStart(OperationInstanceId operation, StepReport& repor
 void ExecutionLoop::acceptArrivals(const std::vector<RouteArrival>& arrivals,
                                    StepReport& report) {
     for (const auto& arrival : arrivals) {
+        report.route_arrivals.push_back(arrival);
         if (upper_.reportArrival(arrival.operation, arrival.droplet,
                                  router_.activationHolds())) {
             recordStart(arrival.operation, report);
