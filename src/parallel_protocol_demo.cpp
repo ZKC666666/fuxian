@@ -88,7 +88,8 @@ void printStep(const StepReport& report, const DynamicDag& dag,
 
 ExperimentSummary runParallelProtocol(const std::string& first_outcome,
                                       const std::string& second_outcome,
-                                      bool trace, bool print_summary) {
+                                      bool trace, bool print_summary,
+                                      BranchActivationMode mode) {
     if ((first_outcome != "output" && first_outcome != "waste") ||
         (second_outcome != "output" && second_outcome != "waste")) {
         throw std::invalid_argument("unknown parallel protocol outcome");
@@ -111,12 +112,14 @@ ExperimentSummary runParallelProtocol(const std::string& first_outcome,
                        [&](OperationInstanceId operation) {
                            return feedbackFor(dag.operation(operation),
                                               first_outcome, second_outcome);
-                       });
+                       }, {}, {}, mode);
     ExperimentMetrics metrics(chip.width(), chip.height(), router.minimumSeparation());
 
     using Clock = std::chrono::steady_clock;
     if (trace) {
-        std::cout << "chip=" << chip.width() << 'x' << chip.height()
+        std::cout << "mode="
+                  << (mode == BranchActivationMode::Immediate ? "immediate" : "after_batch")
+                  << ", chip=" << chip.width() << 'x' << chip.height()
                   << "; group A=" << first_outcome
                   << "; group B=" << second_outcome << '\n';
     }
@@ -139,7 +142,9 @@ ExperimentSummary runParallelProtocol(const std::string& first_outcome,
         throw std::logic_error("completed protocol has unfinished routing requests");
     }
     if (print_summary) {
-        std::cout << "A=" << first_outcome << ", B=" << second_outcome
+        std::cout << "mode="
+                  << (mode == BranchActivationMode::Immediate ? "immediate" : "after_batch")
+                  << ", A=" << first_outcome << ", B=" << second_outcome
                   << ": completed=true, steps=" << result.steps
                   << ", droplets remaining=" << positions.size()
                   << ", blocks=" << dag.blockCount()

@@ -604,12 +604,15 @@ int main(int argc, char** argv) {
     const std::string mode = argc == 1 ? "parallel" : (argc == 2 ? argv[1] : "");
     if (mode != "parallel" && mode != "parallel-oo" && mode != "parallel-ow" &&
         mode != "parallel-wo" && mode != "parallel-ww" &&
+        mode != "batch" && mode != "batch-oo" && mode != "batch-ow" &&
+        mode != "batch-wo" && mode != "batch-ww" &&
         mode != "full" && mode != "full-output" && mode != "full-waste" &&
         mode != "crossing" && mode != "async" && mode != "evacuation" && mode != "protocol" &&
         mode != "protocol-output" && mode != "protocol-waste" &&
         mode != "detour" && mode != "timed" && mode != "router" &&
         mode != "placement" && mode != "output" && mode != "waste") {
         std::cerr << "usage: am_dmf [parallel|parallel-oo|parallel-ow|parallel-wo|parallel-ww|"
+                     "batch|batch-oo|batch-ow|batch-wo|batch-ww|"
                      "full|full-output|full-waste|crossing|async|evacuation|"
                      "protocol|protocol-output|protocol-waste|"
                      "detour|timed|router|placement|output|waste]\n";
@@ -622,12 +625,28 @@ int main(int argc, char** argv) {
                     dmf::demo::runParallelProtocol(first, second, false);
                 }
             }
+        } else if (mode == "batch") {
+            for (const std::string& first : {"output", "waste"}) {
+                for (const std::string& second : {"output", "waste"}) {
+                    dmf::demo::runParallelProtocol(
+                        first, second, false, true,
+                        dmf::BranchActivationMode::AfterBatch);
+                }
+            }
         } else if (mode == "parallel-oo" || mode == "parallel-ow" ||
                    mode == "parallel-wo" || mode == "parallel-ww") {
             const auto outcome = [](char code) {
                 return code == 'o' ? "output" : "waste";
             };
             dmf::demo::runParallelProtocol(outcome(mode[9]), outcome(mode[10]), true);
+        } else if (mode == "batch-oo" || mode == "batch-ow" ||
+                   mode == "batch-wo" || mode == "batch-ww") {
+            const auto outcome = [](char code) {
+                return code == 'o' ? "output" : "waste";
+            };
+            dmf::demo::runParallelProtocol(
+                outcome(mode[6]), outcome(mode[7]), true, true,
+                dmf::BranchActivationMode::AfterBatch);
         } else if (mode == "full") {
             runCompleteProtocol("output");
             std::cout << '\n';

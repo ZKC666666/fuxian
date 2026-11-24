@@ -16,11 +16,12 @@ long long elapsedMicroseconds(Clock::time_point start) {
 ExecutionLoop::ExecutionLoop(DynamicDag& dag, UpperLayer& upper, Router& router,
                              CompletionFeedbackProvider completion_feedback_provider,
                              MovementFeedbackProvider movement_provider,
-                             std::vector<VirtualModule> fixed_blockages)
+                             std::vector<VirtualModule> fixed_blockages,
+                             BranchActivationMode branch_mode)
     : dag_(dag), upper_(upper), router_(router),
       completion_feedback_provider_(std::move(completion_feedback_provider)),
       movement_provider_(std::move(movement_provider)),
-      fixed_blockages_(std::move(fixed_blockages)) {
+      fixed_blockages_(std::move(fixed_blockages)), branch_mode_(branch_mode) {
     if (!completion_feedback_provider_) {
         throw std::invalid_argument("completion feedback provider is empty");
     }
@@ -74,7 +75,9 @@ StepReport ExecutionLoop::step() {
     const int fields_before = router_.costFieldBuilds();
     const int swaps_before = router_.asyncFieldSwaps();
     const int stale_before = router_.staleFieldDecisions();
-    report.activated_blocks = dag_.advanceCycle();
+    const bool release_branches = branch_mode_ == BranchActivationMode::Immediate ||
+                                  dag_.activatedOperationsComplete();
+    report.activated_blocks = dag_.advanceCycle(release_branches);
     const auto running_before = remaining_cycles_;
 
     report.routing_tasks = upper_.placeReadyOperations();

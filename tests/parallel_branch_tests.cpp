@@ -122,6 +122,70 @@ void simultaneousFeedbackActivatesTwoBranches() {
           "same-cycle feedback lost or crossed a decision branch");
 }
 
+void batchBarrierDelaysBothDecisions() {
+    dmf::DynamicDag dag(twoDecisionProtocol());
+    const auto start = dag.activateStart({1, 2});
+    const auto a = dag.operationFor(start, "detect_a");
+    const auto b = dag.operationFor(start, "detect_b");
+    dag.reserveOperation(a);
+    dag.reserveOperation(b);
+    dag.startOperation(a);
+    dag.startOperation(b);
+    dag.finishOperation(a, {3}, "output");
+
+    check(!dag.activatedOperationsComplete() && dag.advanceCycle(false).empty() &&
+              dag.blockCount() == 1,
+          "batch branch activated before the second decision completed");
+    dag.finishOperation(b, {4}, "waste");
+    check(dag.activatedOperationsComplete(), "completed batch still reports active work");
+    const auto branches = dag.advanceCycle(true);
+    check(branches.size() == 2 && dag.blockName(branches[0]) == "output" &&
+              dag.blockName(branches[1]) == "waste" &&
+              dag.reserveOperation(dag.operationFor(branches[0], "finish")) ==
+                  std::vector<int>{3} &&
+              dag.reserveOperation(dag.operationFor(branches[1], "finish")) ==
+                  std::vector<int>{4},
+          "batch release lost a branch or its droplet");
+}
+
+void delayedBranchDoesNotDelayOrdinaryOutput() {
+    using dmf::InputRef;
+    using dmf::OperationType;
+    dmf::BlockSpec start{
+        "start", 3,
+        {{"produce", OperationType::Mix,
+          {InputRef::entry(0), InputRef::entry(1)}, 1},
+         {"consume", OperationType::Detect,
+          {InputRef::output("produce")}, 1},
+         {"branch", OperationType::Detect, {InputRef::entry(2)}, 1}},
+        {decisionFor("branch")}};
+    dmf::DynamicDag dag({"start", {{"start", std::move(start)},
+                                    {"output", terminalBlock("output")},
+                                    {"waste", terminalBlock("waste")}}});
+    const auto start_id = dag.activateStart({1, 2, 3});
+    const auto produce = dag.operationFor(start_id, "produce");
+    const auto consume = dag.operationFor(start_id, "consume");
+    const auto branch = dag.operationFor(start_id, "branch");
+    dag.reserveOperation(produce);
+    dag.reserveOperation(branch);
+    dag.startOperation(produce);
+    dag.startOperation(branch);
+    dag.finishOperation(produce, {4});
+    dag.finishOperation(branch, {5}, "output");
+
+    check(dag.advanceCycle(false).empty() &&
+              dag.inputsIfReady(consume) == std::vector<int>{4},
+          "batch barrier delayed an ordinary operation input");
+    dag.reserveOperation(consume);
+    dag.startOperation(consume);
+    dag.finishOperation(consume, {6});
+    const auto activated = dag.advanceCycle(true);
+    check(activated.size() == 1 &&
+              dag.reserveOperation(dag.operationFor(activated.front(), "finish")) ==
+                  std::vector<int>{5},
+          "delayed branch lost its own output droplet");
+}
+
 dmf::Protocol completeParallelProtocol() {
     using dmf::InputRef;
     using dmf::OperationType;
@@ -156,7 +220,8 @@ dmf::CompletionFeedback feedback(const dmf::OperationInstance& operation,
     return {{id}, std::nullopt};
 }
 
-void completePhysicalScenario(const std::string& a, const std::string& b) {
+void completePhysicalScenario(const std::string& a, const std::string& b,
+                              dmf::BranchActivationMode mode) {
     dmf::DynamicDag dag(completeParallelProtocol());
     const auto start = dag.activateStart({});
     const auto detect_b = dag.operationFor(start, "detect_b");
@@ -175,14 +240,20 @@ void completePhysicalScenario(const std::string& a, const std::string& b) {
     dmf::Router router(chip.width(), chip.height(), positions);
     dmf::ExecutionLoop loop(
         dag, upper, router,
-        [&](int operation) { return feedback(dag.operation(operation), a, b); });
+        [&](int operation) { return feedback(dag.operation(operation), a, b); },
+        {}, {}, mode);
 
     bool a_activated_before_b_completed = false;
+    int first_branch_step = 0;
+    int b_complete_step = 0;
     std::vector<std::string> activated;
     int steps = 0;
-    for (; steps < 180 && !loop.allDone(); ++steps) {
+    for (; steps < 300 && !loop.allDone(); ++steps) {
         const auto report = loop.step();
+        if (std::find(report.completed.begin(), report.completed.end(), detect_b) !=
+            report.completed.end()) b_complete_step = report.step;
         for (const auto block : report.activated_blocks) {
+            if (first_branch_step == 0) first_branch_step = report.step;
             activated.push_back(dag.blockName(block));
             if (activated.size() == 1 &&
                 dag.operation(detect_b).state != dmf::OperationState::Completed) {
@@ -199,9 +270,15 @@ void completePhysicalScenario(const std::string& a, const std::string& b) {
         }
     }
     check(loop.allDone() && positions.empty() && dag.blockCount() == 3 &&
-              activated == std::vector<std::string>({a, b}) &&
-              a_activated_before_b_completed,
-          "parallel simulation did not activate and complete both branches independently");
+              activated == std::vector<std::string>({a, b}),
+          "parallel simulation did not complete both branches");
+    if (mode == dmf::BranchActivationMode::Immediate) {
+        check(a_activated_before_b_completed && first_branch_step < b_complete_step,
+              "immediate mode waited for the second decision");
+    } else {
+        check(!a_activated_before_b_completed && first_branch_step > b_complete_step,
+              "batch mode activated a branch before the batch completed");
+    }
 }
 
 }  // namespace
@@ -211,9 +288,12 @@ int main() {
         invalidDecisionSpecsAreRejected();
         independentDecisionsActivateSeparately();
         simultaneousFeedbackActivatesTwoBranches();
+        batchBarrierDelaysBothDecisions();
+        delayedBranchDoesNotDelayOrdinaryOutput();
         for (const std::string& a : {"output", "waste"}) {
             for (const std::string& b : {"output", "waste"}) {
-                completePhysicalScenario(a, b);
+                completePhysicalScenario(a, b, dmf::BranchActivationMode::Immediate);
+                completePhysicalScenario(a, b, dmf::BranchActivationMode::AfterBatch);
             }
         }
         std::cout << "parallel branch tests: passed\n";

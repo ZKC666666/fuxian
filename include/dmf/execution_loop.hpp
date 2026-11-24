@@ -16,6 +16,8 @@ struct CompletionFeedback {
     std::optional<std::string> outcome;
 };
 
+enum class BranchActivationMode { Immediate, AfterBatch };
+
 struct StepReport {
     int step = 0;
     std::vector<BlockInstanceId> activated_blocks;
@@ -52,7 +54,8 @@ public:
     ExecutionLoop(DynamicDag& dag, UpperLayer& upper, Router& router,
                   CompletionFeedbackProvider completion_feedback_provider,
                   MovementFeedbackProvider movement_provider = {},
-                  std::vector<VirtualModule> fixed_blockages = {});
+                  std::vector<VirtualModule> fixed_blockages = {},
+                  BranchActivationMode branch_mode = BranchActivationMode::Immediate);
 
     StepReport step();
     void completeEarly(OperationInstanceId operation, CompletionFeedback feedback);
@@ -66,6 +69,7 @@ private:
     CompletionFeedbackProvider completion_feedback_provider_;
     MovementFeedbackProvider movement_provider_;
     std::vector<VirtualModule> fixed_blockages_;
+    BranchActivationMode branch_mode_;
     std::map<OperationInstanceId, int> remaining_cycles_;
     std::map<OperationInstanceId, CompletionFeedback> pending_completion_;
     int step_count_ = 0;

@@ -38,7 +38,8 @@ public:
     std::vector<DropletId> startOperation(OperationInstanceId id);
     void finishOperation(OperationInstanceId id, std::vector<DropletId> outputs,
                          std::optional<std::string> outcome = std::nullopt);
-    std::vector<BlockInstanceId> advanceCycle();
+    std::vector<BlockInstanceId> advanceCycle(bool activate_pending_branches = true);
+    bool activatedOperationsComplete() const;
 
     int cycle() const { return cycle_; }
     std::size_t blockCount() const { return blocks_.size(); }

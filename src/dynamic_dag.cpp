@@ -151,10 +151,11 @@ void DynamicDag::finishOperation(OperationInstanceId id, std::vector<DropletId> 
     if (branch_to_add) pending_branches_.push_back(std::move(*branch_to_add));
 }
 
-std::vector<BlockInstanceId> DynamicDag::advanceCycle() {
+std::vector<BlockInstanceId> DynamicDag::advanceCycle(bool activate_pending_branches) {
     ++cycle_;
     available_droplets_.insert(pending_outputs_.begin(), pending_outputs_.end());
     pending_outputs_.clear();
+    if (!activate_pending_branches) return {};
     auto branches = std::move(pending_branches_);
     pending_branches_.clear();
     std::vector<BlockInstanceId> activated;
@@ -164,11 +165,16 @@ std::vector<BlockInstanceId> DynamicDag::advanceCycle() {
     return activated;
 }
 
+bool DynamicDag::activatedOperationsComplete() const {
+    return !blocks_.empty() &&
+           std::all_of(operations_.begin(), operations_.end(), [](const auto& entry) {
+               return entry.second.state == OperationState::Completed;
+           });
+}
+
 bool DynamicDag::allDone() const {
     if (blocks_.empty() || !pending_branches_.empty()) return false;
-    return std::all_of(operations_.begin(), operations_.end(), [](const auto& entry) {
-        return entry.second.state == OperationState::Completed;
-    });
+    return activatedOperationsComplete();
 }
 
 OperationInstanceId DynamicDag::operationFor(BlockInstanceId block,
