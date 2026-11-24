@@ -19,6 +19,10 @@ add_executable(dmf_parallel_experiments src/parallel_experiments.cpp
                                         src/parallel_protocol_demo.cpp)
 target_link_libraries(dmf_parallel_experiments PRIVATE dmf_core)
 
+add_executable(dmf_paper_parallel_experiments src/paper_parallel_experiments.cpp
+                                              src/paper_parallel_case.cpp)
+target_link_libraries(dmf_paper_parallel_experiments PRIVATE dmf_core)
+
 add_executable(dmf_custom_route src/custom_route.cpp src/custom_route_case.cpp)
 target_link_libraries(dmf_custom_route PRIVATE dmf_core)
 target_compile_definitions(dmf_custom_route PRIVATE
@@ -57,15 +61,21 @@ target_link_libraries(dmf_parallel_branch_tests PRIVATE dmf_core)
 add_executable(dmf_experiment_metrics_tests tests/experiment_metrics_tests.cpp)
 target_link_libraries(dmf_experiment_metrics_tests PRIVATE dmf_core)
 
+add_executable(dmf_paper_parallel_case_tests tests/paper_parallel_case_tests.cpp
+                                             src/paper_parallel_case.cpp)
+target_include_directories(dmf_paper_parallel_case_tests PRIVATE src)
+target_link_libraries(dmf_paper_parallel_case_tests PRIVATE dmf_core)
+
 add_executable(dmf_field_benchmark benchmarks/field_update_benchmark.cpp)
 target_link_libraries(dmf_field_benchmark PRIVATE dmf_core)
 
-foreach(target dmf_core am_dmf dmf_parallel_experiments dmf_custom_route dmf_runtime_tests
+foreach(target dmf_core am_dmf dmf_parallel_experiments
+               dmf_paper_parallel_experiments dmf_custom_route dmf_runtime_tests
                dmf_placement_tests dmf_router_tests dmf_execution_tests
                dmf_protocol_execution_tests dmf_evacuation_tests
                dmf_async_cost_field_tests dmf_crossing_tests
                dmf_full_protocol_tests dmf_parallel_branch_tests
-               dmf_experiment_metrics_tests
+               dmf_experiment_metrics_tests dmf_paper_parallel_case_tests
                dmf_field_benchmark)
   if(MSVC)
     target_compile_options(${target} PRIVATE /W4 /permissive- /EHsc)
@@ -86,9 +96,12 @@ add_test(NAME crossing_tests COMMAND dmf_crossing_tests)
 add_test(NAME full_protocol_tests COMMAND dmf_full_protocol_tests)
 add_test(NAME parallel_branch_tests COMMAND dmf_parallel_branch_tests)
 add_test(NAME experiment_metrics_tests COMMAND dmf_experiment_metrics_tests)
+add_test(NAME paper_parallel_case_tests COMMAND dmf_paper_parallel_case_tests)
 add_test(NAME full_protocol_demo COMMAND am_dmf full)
 add_test(NAME parallel_demo COMMAND am_dmf parallel)
 add_test(NAME batch_demo COMMAND am_dmf batch)
+add_test(NAME paper_parallel_scenario1 COMMAND dmf_paper_parallel_experiments
+         paper_parallel_scenario1.csv)
 add_test(NAME crossing_demo COMMAND am_dmf crossing)
 add_test(NAME async_demo COMMAND am_dmf async)
 add_test(NAME evacuation_demo COMMAND am_dmf evacuation)

@@ -2,7 +2,7 @@
 
 本工程依据论文 [A Two-Layer Decoupled Synthesis Framework for Uncertain Biochemical Protocols on Active-Matrix Digital Microfluidic Platforms](https://doi.org/10.1109/TCAD.2026.3721419) 逐步复现。论文给出了框架和伪代码，没有公开完整实现与实验生成程序。工程使用 C++17，文档使用中文。
 
-当前 `main` 分支处于 **v1.3：动态分支与批次等待的小规模对照**。每个正式版本都用 Git 标签保存；桌面的 `PROJECT/versions/版本号` 是可独立用 Visual Studio 打开的源码副本。此前可运行但简化较多的探索原型保存在 Git 标签 `v0.0-prototype`，不作为论文数值复现结果。
+当前 `main` 分支处于 **v1.4：30×30 阵列、9 组混合的仿真实验入口**。每个正式版本都用 Git 标签保存；桌面的 `PROJECT/versions/版本号` 是可独立用 Visual Studio 打开的源码副本。此前可运行但简化较多的探索原型保存在 Git 标签 `v0.0-prototype`，不作为论文数值复现结果。
 
 ## 先理解两个图
 
@@ -298,6 +298,25 @@ CSV 中 `plan_step_*_us` 只计 `Router::planStep()` 的计算时间；`loop_*_u
 
 运行 `am_dmf.exe` 可看原动态模式的四行摘要，运行 `am_dmf.exe batch` 可看批次模式的四行摘要；`parallel-ow`、`batch-ow` 分别逐步打印同一 Output/Waste 案例。Visual Studio 中直接选择 `dmf_parallel_experiments.exe` 并按 Ctrl+F5，可生成并排比较两种模式的 CSV。
 
+## v1.4 新增：论文第一类协议的最小规模试验
+
+`VirtualChip` 新增“模块网格 + 实际电极宽高”的构造方式：`VirtualChip(4,4,3,30,30)` 将 4×4 个 3×3 虚拟模块放入精确的 30×30 阵列。旧构造方式和旧案例的尺寸保持不变。新实验建立 **9 组** `Dispense ×2 → Mix → Detect → Output/Waste`；每组拥有自己的操作和液滴编号。完成时核对 9 个终点流程块、45 个操作实例、36 个已下发且已到达的路由任务，以及没有剩余液滴。
+
+| 参数 | v1.4 的设置与出处 |
+| --- | --- |
+| 阵列和组数 | 30×30、9 组混合：对应论文 Table I 的最小配置 |
+| 模块 | 4×4 个 3×3 虚拟模块，间隔与旧工程相同：工程假设 |
+| 18 个入口 | 分布在左、右、上、下边界的九对电极：工程假设，坐标见 `sourcePorts()` |
+| Output / Waste 口 | `(29,0)` / `(0,29)`：工程假设；当前各只有一个端口 |
+| Dispense / Mix / Detect 时长 | 1 / 3 / 2 控制步：沿用演示值，并非论文公开的实验时长 |
+| 分支概率 | 100%、90%、70%、50%：对应论文四类场景；每次用记录的随机种子生成九个实际结果 |
+
+`dmf_paper_parallel_experiments.exe` **默认只运行 100% 输出场景**：五个种子、两种模式，共 10 次；成功后生成 `paper_parallel_scenario1.csv`，退出码为 0。传入 `--all` 才运行四类场景共 40 次，生成 `paper_parallel_trials.csv`。CSV 同时保存 `seed`、九个结果组成的 `outcome_pattern`（`O` 为 Output、`W` 为 Waste）、实际输出数、模式、完成状态、步数和耗时。两种模式使用完全相同的种子和结果串。单次九组任务中的 90% 等数值是**生成概率**，不意味着结果数量恰好等于百分比。
+
+当前路由策略在部分分支组合中可能长时间绕行。程序达到 1000 步后将该次标为 `timeout`，附带液滴位置、目标和未完成操作；完整实验只要出现超时或错误就返回非零退出码。**失败行保留在 CSV 中，不能据仅成功的行比较两种模式的性能。**在已运行的一轮 Debug 检查中，全部输出的 10 次均完成，四类场景的 40 次中有 4 次超时；两轮 Release 完整实验分别有 3 次和 4 次超时。相同种子只固定检测结果，异步代价场的完成时刻仍可能改变路由路径和执行步数；即使全部输出案例均完成，不同运行的步数也可能不同。因此本版既没有普遍完成保证，也不能作为论文 Table I 的数值复现。
+
+在 Visual Studio 中打开 `PROJECT/versions/v1.4`，选择 `dmf_paper_parallel_experiments.exe` 并按 Ctrl+F5，可先看到全部输出场景的结果文件；想运行全部场景，在终端执行 `dmf_paper_parallel_experiments.exe --all`。输出 CSV 位于运行时的工作目录；也可在命令末尾给出完整的文件路径。测试入口 `dmf_placement_tests.exe` 检查精确阵列边界，CTest 的 `paper_parallel_scenario1` 检查 10 次完整仿真。
+
 ## 编译与运行
 
 需要 C++17 编译器和 CMake。在已配置好编译器的终端中执行：
@@ -337,13 +356,15 @@ ctest --test-dir build -C Debug --output-on-failure
 .\build\Debug\dmf_parallel_branch_tests.exe
 .\build\Debug\dmf_field_benchmark.exe
 .\build\Debug\dmf_parallel_experiments.exe
+.\build\Debug\dmf_paper_parallel_experiments.exe
+.\build\Debug\dmf_paper_parallel_experiments.exe --all
 ```
 
-若使用单配置生成器，可执行文件通常位于构建目录下。在 Visual Studio 中通过“文件 → 打开 → 文件夹”打开 `PROJECT/versions/v1.3`，等待 CMake 配置完成。选择绿色运行按钮旁的 `am_dmf.exe` 并按 Ctrl+F5，可看到动态模式的四行摘要；选择 `dmf_parallel_experiments.exe` 可生成两种模式的 CSV；选择 `dmf_parallel_branch_tests.exe` 可检查批次屏障与分支规则。想在控制台直接比较两种模式，可从终端运行 `am_dmf.exe` 与 `am_dmf.exe batch`。旧版本文件夹保持独立；请让 Visual Studio 为 v1.3 文件夹重新配置和编译，不要把旧构建目录中的测试程序与新库混用。
+若使用单配置生成器，可执行文件通常位于构建目录下。在 Visual Studio 中通过“文件 → 打开 → 文件夹”打开 `PROJECT/versions/v1.4`，等待 CMake 配置完成。选择绿色运行按钮旁的 `dmf_paper_parallel_experiments.exe` 并按 Ctrl+F5，可先检查 30×30 的确定性场景；`am_dmf.exe` 和 `dmf_parallel_experiments.exe` 仍保留旧的小规模演示。旧版本文件夹保持独立；请让 Visual Studio 为 v1.4 文件夹重新配置和编译，不要把旧构建目录中的测试程序与新库混用。
 
 ## 当前边界与后续步骤
 
-v0.6 已将 Mix、Detect、Output、Waste 贯穿到同一次仿真；v0.7 新增对**提前预告的操作区域**进行安全撤离；v0.8 对已有目标在障碍变化后的代价场重算使用单个后台线程；v0.9 能在区域启用前识别并处理目标被隔断的液滴；v1.0 让 Dispense、Split 也加入同一次协议仿真；v1.1 支持同一流程块的多个独立检测决定；v1.2 给四种小案例增加逐次统计和安全核对；v1.3 增加批次等待对照。入口、操作时长、分裂产物位置及部分路由与撤离规则是工程假设。**还没有**自动更换不可行操作区域、未预告障碍困住液滴时的完整处理，也没有论文实验所用的大规模基准和对照结果。当前实现不生成真实电极驱动序列。
+v0.6 已将 Mix、Detect、Output、Waste 贯穿到同一次仿真；v0.7 新增对**提前预告的操作区域**进行安全撤离；v0.8 对已有目标在障碍变化后的代价场重算使用单个后台线程；v0.9 能在区域启用前识别并处理目标被隔断的液滴；v1.0 让 Dispense、Split 也加入同一次协议仿真；v1.1 支持同一流程块的多个独立检测决定；v1.2 给四种小案例增加逐次统计和安全核对；v1.3 增加批次等待对照；v1.4 建立 30×30、9 组混合的试验入口并暴露部分场景的路由超时。入口、操作时长、分裂产物位置及部分路由与撤离规则是工程假设。**还没有**自动更换不可行操作区域、未预告障碍困住液滴时的完整处理，也没有论文实验所用的完整大规模基准和可靠对照结果。当前实现不生成真实电极驱动序列。
 
 论文没有精确规定所有周期内事件的先后边界。当前固定为“本步完成的操作，其输出液滴和检测分支从下一步开始可用”；这是工程假设。`ExecutionLoop` 默认使用理想移动反馈，v0.5 允许注入失败或成功的位置反馈，但尚未接硬件反馈入口。
 

@@ -6,6 +6,9 @@ build-v1.2-snapshot-check/
 build-v1.3-check/
 build-v1.3-release/
 build-v1.3-snapshot-check/
+build-v1.4-check/
+build-v1.4-release/
+build-v1.4-snapshot-check/
 out/
 .vs/
 .agents/

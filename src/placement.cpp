@@ -5,6 +5,19 @@
 
 namespace dmf {
 
+namespace {
+int minimumSpan(int modules, int module_side) {
+    if (modules <= 0 || module_side <= 0) {
+        throw std::invalid_argument("invalid virtual chip dimensions");
+    }
+    const auto span = static_cast<long long>(module_side) * (2LL * modules + 1);
+    if (span > std::numeric_limits<int>::max()) {
+        throw std::invalid_argument("virtual chip dimensions are too large");
+    }
+    return static_cast<int>(span);
+}
+}  // namespace
+
 bool operator==(Point left, Point right) {
     return left.x == right.x && left.y == right.y;
 }
@@ -14,8 +27,17 @@ Point VirtualModule::center() const {
 }
 
 VirtualChip::VirtualChip(int columns, int rows, int module_side)
-    : columns_(columns), rows_(rows), module_side_(module_side) {
-    if (columns <= 0 || rows <= 0 || module_side < 3 || module_side % 2 == 0) {
+    : VirtualChip(columns, rows, module_side,
+                  minimumSpan(columns, module_side),
+                  minimumSpan(rows, module_side)) {}
+
+VirtualChip::VirtualChip(int columns, int rows, int module_side,
+                         int electrode_width, int electrode_height)
+    : columns_(columns), rows_(rows), module_side_(module_side),
+      width_(electrode_width), height_(electrode_height) {
+    if (module_side < 3 || module_side % 2 == 0 ||
+        electrode_width < minimumSpan(columns, module_side) ||
+        electrode_height < minimumSpan(rows, module_side)) {
         throw std::invalid_argument("invalid virtual chip dimensions");
     }
     int id = 1;

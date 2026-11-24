@@ -22,6 +22,21 @@ void rejects(Action action, const std::string& message) {
     throw std::runtime_error(message);
 }
 
+void explicitChipBoundsKeepModulesInside() {
+    dmf::VirtualChip chip(4, 4, 3, 30, 30);
+    check(chip.width() == 30 && chip.height() == 30 &&
+              chip.contains({29, 29}) && !chip.contains({30, 29}),
+          "explicit electrode bounds are wrong");
+    const auto module = chip.nearestFree({{29, 29}}, {3, 3});
+    check(module && module->top_left == dmf::Point{21, 21} &&
+              chip.contains({module->top_left.x + 2, module->top_left.y + 2}),
+          "module is outside the explicit chip");
+    check(dmf::VirtualChip(4, 4).width() == 27,
+          "explicit bounds changed legacy chip dimensions");
+    rejects<std::invalid_argument>([] { dmf::VirtualChip(4, 4, 3, 26, 30); },
+                                   "chip accepted a clipped module grid");
+}
+
 dmf::Protocol mixThenDetect() {
     using dmf::InputRef;
     using dmf::OperationType;
@@ -203,6 +218,7 @@ void operationDurationMustBePositive() {
 
 int main() {
     try {
+        explicitChipBoundsKeepModulesInside();
         operationWaitsForBothArrivals();
         occupiedModuleDefersAnotherOperation();
         sharedDropletIsReservedOnce();
