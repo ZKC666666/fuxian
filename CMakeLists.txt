@@ -102,6 +102,7 @@ add_test(NAME parallel_demo COMMAND am_dmf parallel)
 add_test(NAME batch_demo COMMAND am_dmf batch)
 add_test(NAME paper_parallel_scenario1 COMMAND dmf_paper_parallel_experiments
          paper_parallel_scenario1.csv)
+add_test(NAME paper_parallel_seed1601 COMMAND dmf_paper_parallel_experiments --check-1601)
 add_test(NAME crossing_demo COMMAND am_dmf crossing)
 add_test(NAME async_demo COMMAND am_dmf async)
 add_test(NAME evacuation_demo COMMAND am_dmf evacuation)

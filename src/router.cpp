@@ -14,6 +14,23 @@ namespace {
 constexpr int unreachable = std::numeric_limits<int>::max();
 }
 
+bool Router::DetourState::observeCycle(Point current) {
+    if (length != 0 && history[length - 1] == current) length = 0;
+    if (length == history.size()) {
+        std::move(history.begin() + 1, history.end(), history.begin());
+        --length;
+    }
+    history[length++] = current;
+    for (std::size_t period = 2; 2 * period <= length; ++period) {
+        const auto last = history.begin() + length;
+        if (std::equal(last - 2 * period, last - period, last - period)) {
+            length = 0;
+            return true;
+        }
+    }
+    return false;
+}
+
 Router::Router(int width, int height, DropletPositions& positions,
                int minimum_separation, CostFieldMode field_mode)
     : width_(width), height_(height), minimum_separation_(minimum_separation),
@@ -160,11 +177,13 @@ bool Router::hasTasks() const {
     });
 }
 
-int Router::futureCost(Point candidate, DropletId droplet,
+int Router::futureCost(Point candidate, DropletId droplet, int allowed_region,
                        const Occupancy& occupied, const std::vector<int>& field) const {
     int best = field[index(candidate)];
     for (const auto next : neighbors(candidate)) {
-        if (legal(next, droplet, occupied)) best = std::min(best, field[index(next)]);
+        if (legal(next, droplet, occupied) && !upcomingBlocks(next, allowed_region)) {
+            best = std::min(best, field[index(next)]);
+        }
     }
     return best;
 }
@@ -176,7 +195,6 @@ const std::vector<int>& Router::fieldFor(Point target, int allowed_module) {
         if (field_versions_.at(key) != field_snapshot_->version) {
             auto updated = field_updater_.take(key, field_snapshot_->version);
             if (updated) installUpdatedField(key, std::move(*updated));
-            else ++stale_field_decisions_;
         }
         return found->second;
     }
@@ -194,7 +212,42 @@ void Router::installUpdatedField(CostFieldKey key, std::vector<int> field) {
     ++async_field_swaps_;
 }
 
+void Router::refreshUnusableField(CostFieldKey key, const std::array<Point, 4>& candidates,
+                                  DropletId droplet, int allowed_region,
+                                  const Occupancy& occupied) {
+    if (field_versions_.at(key) == field_snapshot_->version) return;
+
+    auto& field = fields_.at(key);
+    bool legal_neighbor = false;
+    for (const auto candidate : candidates) {
+        if (!legal(candidate, droplet, occupied) || upcomingBlocks(candidate, allowed_region)) {
+            continue;
+        }
+        legal_neighbor = true;
+        if (field[index(candidate)] != unreachable) {
+            ++stale_field_decisions_;
+            return;
+        }
+    }
+    if (!legal_neighbor) {
+        ++stale_field_decisions_;
+        return;
+    }
+
+    // The old map can trap an input inside a module that just finished.
+    auto updated = field_updater_.take(key, field_snapshot_->version);
+    if (updated) {
+        installUpdatedField(key, std::move(*updated));
+        return;
+    }
+    field = CostFieldUpdater::build(key, *field_snapshot_);
+    field_versions_.at(key) = field_snapshot_->version;
+    ++field_builds_;
+    field_updater_.cancel(key);
+}
+
 void Router::environmentChanged() {
+    detours_.clear();
     open_components_.clear();
     future_components_.clear();
     crossing_paths_.clear();
@@ -344,6 +397,44 @@ std::optional<Point> Router::nextCrossingMove(DropletId droplet, int module_id,
     const Point next = path.front();
     crossing_paths_[droplet] = {module_id, std::move(path)};
     return next;
+}
+
+std::optional<Point> Router::nextDetourMove(DropletId droplet, Point target,
+                                           int allowed_region, const Occupancy& occupied) {
+    auto& detour = detours_[droplet];
+    const auto allowed = [&](Point point) {
+        return legal(point, droplet, occupied) && !upcomingBlocks(point, allowed_region);
+    };
+    if (!detour.remaining.empty()) {
+        const auto next = detour.remaining.back();
+        if (allowed(next)) return next;
+        detour.remaining.clear();
+    }
+
+    const auto current = positions_.at(droplet);
+    if (!detour.observeCycle(current) || !allowed(target)) return std::nullopt;
+
+    // Search for this droplet only, with all other positions held at this snapshot.
+    const int start = index(current);
+    const int goal = index(target);
+    std::vector<int> parent(blocked_.size(), -1);
+    std::queue<int> frontier;
+    frontier.push(start);
+    parent[start] = start;
+    while (!frontier.empty() && parent[goal] == -1) {
+        const int cell = frontier.front();
+        frontier.pop();
+        for (const auto next : neighbors({cell % width_, cell / width_})) {
+            if (!contains(next) || parent[index(next)] != -1 || !allowed(next)) continue;
+            parent[index(next)] = cell;
+            frontier.push(index(next));
+        }
+    }
+    if (parent[goal] == -1 || goal == start) return std::nullopt;
+    for (int cell = goal; cell != start; cell = parent[cell]) {
+        detour.remaining.push_back({cell % width_, cell / width_});
+    }
+    return detour.remaining.back();
 }
 
 void Router::waitForCostFieldUpdates() {
@@ -496,17 +587,20 @@ std::vector<MoveCommand> Router::planStep(RouteDecisionTrace* trace) {
             trace->layout_version = field_snapshot_->version;
         }
         if (!evacuating && needsEvacuation(droplet, current)) {
+            detours_.erase(droplet);
             if (watched) trace->action = "waiting_for_evacuation";
             continue;
         }
         if (!evacuating && crossing == crossing_modules_.end() &&
             modules_with_crossings.count(tasks_.at(droplet).module_id) != 0) {
+            detours_.erase(droplet);
             if (watched) trace->action = "waiting_for_crossing";
             occupied.planned[index(current)] = droplet;
             pending_.push_back({droplet, current, current});
             continue;
         }
         if (crossing != crossing_modules_.end()) {
+            detours_.erase(droplet);
             const auto next = nextCrossingMove(droplet, crossing->second, occupied);
             if (!next) waiting_for_crossing_.push_back(droplet);
             const auto chosen = next.value_or(current);
@@ -525,24 +619,35 @@ std::vector<MoveCommand> Router::planStep(RouteDecisionTrace* trace) {
         int allowed_module = 0;
         if (evacuating) allowed_module = -1;
         else if (owner != upcoming_input_owners_.end()) allowed_module = owner->second;
-        const int occupied_region = evacuating ? upcomingRegion(current) : 0;
+        const int allowed_region = evacuating ? upcomingRegion(current) : allowed_module;
+        if (evacuating) {
+            detours_.erase(droplet);
+        } else if (const auto detour = nextDetourMove(droplet, target, allowed_region, occupied)) {
+            if (watched) {
+                trace->action = "detour";
+                trace->chosen = *detour;
+            }
+            occupied.planned[index(*detour)] = droplet;
+            pending_.push_back({droplet, current, *detour});
+            continue;
+        }
+        auto candidates = neighbors(current);
+        if (droplet % 2 == 0) std::swap(candidates[1], candidates[3]);
+        const CostFieldKey key{index(target), allowed_module};
         const auto& field = fieldFor(target, allowed_module);
+        refreshUnusableField(key, candidates, droplet, allowed_region, occupied);
         if (watched) {
             trace->action = evacuating ? "evacuation" : "routing";
-            trace->field_version = field_versions_.at({index(target), allowed_module});
+            trace->field_version = field_versions_.at(key);
         }
         Point chosen = current;
         int best_cost = unreachable;
         int best_future = unreachable;
         bool best_backtracks = true;
-        auto candidates = neighbors(current);
-        if (droplet % 2 == 0) std::swap(candidates[1], candidates[3]);
+        const auto previous = previous_positions_.find(droplet);
         for (const auto candidate : candidates) {
             const char* rejection = positionRejection(candidate, droplet, occupied);
-            if (!rejection && evacuating) {
-                const int region = upcomingRegion(candidate);
-                if (region != 0 && region != occupied_region) rejection = "reserved_module";
-            } else if (!rejection && upcomingBlocks(candidate, allowed_module)) {
+            if (!rejection && upcomingBlocks(candidate, allowed_region)) {
                 rejection = "reserved_module";
             }
             if (rejection) {
@@ -554,20 +659,18 @@ std::vector<MoveCommand> Router::planStep(RouteDecisionTrace* trace) {
                 if (watched) trace->candidates.push_back({candidate, "field_unreachable"});
                 continue;
             }
-            const int future = futureCost(candidate, droplet, occupied, field);
-            const auto previous = previous_positions_.find(droplet);
+            const int future = futureCost(candidate, droplet, allowed_region, occupied, field);
             const bool backtracks = previous != previous_positions_.end() &&
                                     candidate == previous->second;
-            const int adjusted_cost = cost + (backtracks ? 3 : 0);
             if (watched) {
-                trace->candidates.push_back({candidate, {}, adjusted_cost, future, backtracks});
+                trace->candidates.push_back({candidate, {}, cost, future, backtracks});
             }
-            if (adjusted_cost < best_cost ||
-                (adjusted_cost == best_cost && future < best_future) ||
-                (adjusted_cost == best_cost && future == best_future &&
+            if (cost < best_cost ||
+                (cost == best_cost && future < best_future) ||
+                (cost == best_cost && future == best_future &&
                  best_backtracks && !backtracks)) {
                 chosen = candidate;
-                best_cost = adjusted_cost;
+                best_cost = cost;
                 best_future = future;
                 best_backtracks = backtracks;
             }
@@ -640,6 +743,11 @@ std::vector<RouteArrival> Router::applyFeedback(
             path->second.second.pop_front();
         }
         positions_[command.droplet] = position;
+        const auto detour = detours_.find(command.droplet);
+        if (detour != detours_.end() && !detour->second.remaining.empty() &&
+            position == detour->second.remaining.back()) {
+            detour->second.remaining.pop_back();
+        }
         const auto evacuation = evacuation_targets_.find(command.droplet);
         if (evacuation != evacuation_targets_.end() &&
             position == evacuation->second) {
@@ -653,6 +761,7 @@ std::vector<RouteArrival> Router::applyFeedback(
             const auto target = task->second.target;
             arrived.push_back({task->second.operation, command.droplet});
             tasks_.erase(task);
+            detours_.erase(command.droplet);
             discardUnusedFields(target);
         }
     }

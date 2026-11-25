@@ -117,6 +117,25 @@ void diagnosticDecisionUsesLatestFieldAndReportsBlockedCandidate() {
     router.applyFeedback({{1, detour.to}});
 }
 
+void sharedFieldLetsNewDropletLeaveReleasedModule() {
+    dmf::DropletPositions positions{{1, {0, 4}}, {2, {5, 4}}};
+    dmf::Router router(9, 9, positions);
+    const dmf::Point goal{8, 4};
+    router.setBlockages({{1, {4, 3}, 3}});
+    router.addTasks({{1, 1, goal, 0}});
+    const auto first = router.planStep().at(0);
+    router.applyFeedback({{1, first.to}});
+
+    router.setBlockages({});
+    router.addTasks({{2, 2, goal, 0}});
+    dmf::RouteDecisionTrace trace{2};
+    const auto moves = router.planStep(&trace);
+    check(moves.size() == 2 && trace.field_version == trace.layout_version &&
+              !(trace.chosen == trace.from),
+          "an old shared field left a droplet waiting inside a released module");
+    router.applyFeedback({{1, moves[0].to}, {2, moves[1].to}});
+}
+
 }  // namespace
 
 int main() {
@@ -126,6 +145,7 @@ int main() {
         rapidUpdatesDiscardOldGenerations();
         sharedTargetReusesOneBackgroundJob();
         diagnosticDecisionUsesLatestFieldAndReportsBlockedCandidate();
+        sharedFieldLetsNewDropletLeaveReleasedModule();
         std::cout << "async cost field tests: passed\n";
     } catch (const std::exception& error) {
         std::cerr << "async cost field tests: " << error.what() << '\n';

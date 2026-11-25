@@ -11,6 +11,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace {
@@ -24,6 +25,7 @@ using dmf::paper::outcomesFor;
 using dmf::paper::feedbackFor;
 constexpr int max_steps = 1000;
 constexpr dmf::DropletId watched_droplet = 1;
+constexpr char regression_pattern[] = "WOOOOOWWW";
 
 std::string csvText(const std::string& value) {
     std::string quoted = "\"";
@@ -301,11 +303,31 @@ int diagnose(const std::string& pattern) {
     return all_complete ? 0 : 1;
 }
 
+int checkSeed1601() {
+    std::vector<std::string> outcomes;
+    for (const char branch : std::string_view(regression_pattern)) {
+        outcomes.emplace_back(branch == 'O' ? "output" : "waste");
+    }
+    try {
+        const auto summary = runTrial(outcomes, dmf::BranchActivationMode::Immediate,
+                                      dmf::CostFieldMode::WaitForLatest);
+        if (summary.route_requests != 36 || summary.route_arrivals != 36) {
+            throw std::logic_error("seed 1601 should complete all 36 routing tasks");
+        }
+        std::cout << "seed 1601 complete, steps=" << summary.steps << '\n';
+        return 0;
+    } catch (const std::exception& error) {
+        std::cerr << "seed 1601: " << error.what() << '\n';
+        return 1;
+    }
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
+    if (argc == 2 && std::string_view(argv[1]) == "--check-1601") return checkSeed1601();
     if (argc > 1 && std::string(argv[1]) == "--diagnose") {
-        if (argc <= 3) return diagnose(argc == 3 ? argv[2] : "WOOOOOWWW");
+        if (argc <= 3) return diagnose(argc == 3 ? argv[2] : regression_pattern);
         std::cerr << "usage: dmf_paper_parallel_experiments --diagnose [OOOOOOOOW]\n";
         return 2;
     }

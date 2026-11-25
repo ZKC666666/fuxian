@@ -98,6 +98,15 @@ private:
         std::vector<DropletId> planned;
     };
 
+    struct DetourState {
+        // Two observations of a cycle of up to four moves.
+        std::array<Point, 8> history{};
+        std::size_t length = 0;
+        std::vector<Point> remaining;
+
+        bool observeCycle(Point current);
+    };
+
     int width_;
     int height_;
     int minimum_separation_;
@@ -105,6 +114,7 @@ private:
     DropletPositions& positions_;
     DropletPositions previous_positions_;
     std::map<DropletId, RoutingTask> tasks_;
+    std::map<DropletId, DetourState> detours_;
     std::vector<int> upcoming_region_;
     std::map<DropletId, int> upcoming_input_owners_;
     std::vector<UpcomingBlockage> upcoming_blockages_;
@@ -149,10 +159,16 @@ private:
     const std::vector<int>& futureComponents(const VirtualModule& module);
     std::optional<Point> nextCrossingMove(DropletId droplet, int module_id,
                                            const Occupancy& occupied);
+    std::optional<Point> nextDetourMove(DropletId droplet, Point target,
+                                         int allowed_region, const Occupancy& occupied);
     void installUpdatedField(CostFieldKey key, std::vector<int> field);
     int futureCost(Point candidate, DropletId droplet,
-                   const Occupancy& occupancy, const std::vector<int>& field) const;
+                   int allowed_region, const Occupancy& occupancy,
+                   const std::vector<int>& field) const;
     const std::vector<int>& fieldFor(Point target, int allowed_module);
+    void refreshUnusableField(CostFieldKey key, const std::array<Point, 4>& candidates,
+                              DropletId droplet, int allowed_region,
+                              const Occupancy& occupied);
 };
 
 }  // namespace dmf
