@@ -5,14 +5,17 @@
 #include <array>
 #include <charconv>
 #include <chrono>
+#include <cstdlib>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <map>
+#include <set>
 #include <sstream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -106,17 +109,66 @@ void writeTraceStep(std::ostream& out, const dmf::StepReport& report,
     out << '\n';
 }
 
+struct TrialSettings {
+    dmf::Point output_port;
+    int mix_cycles = 3;
+    int detect_cycles = 2;
+};
+
+struct TrialMilestones {
+    int first_detect = 0;
+    int last_detect = 0;
+    int first_output_move = 0;
+    int last_output_arrival = 0;
+    int completed_detections = 0;
+    int output_arrivals = 0;
+    std::set<dmf::DropletId> output_droplets;
+
+    void observe(const dmf::StepReport& report, const dmf::DynamicDag& dag) {
+        for (const auto op : report.completed) {
+            if (dag.operationType(op) != dmf::OperationType::Detect) continue;
+            if (first_detect == 0) first_detect = report.step;
+            last_detect = report.step;
+            ++completed_detections;
+        }
+        for (const auto& task : report.routing_tasks) {
+            if (dag.operationType(task.operation) == dmf::OperationType::Output) {
+                output_droplets.insert(task.droplet);
+            }
+        }
+        if (first_output_move == 0) {
+            for (std::size_t i = 0; i < report.moves.size(); ++i) {
+                const auto& move = report.moves[i];
+                if (output_droplets.count(move.droplet) != 0 &&
+                    !(report.observed.at(i).observed == move.from)) {
+                    first_output_move = report.step;
+                    break;
+                }
+            }
+        }
+        for (const auto& arrival : report.route_arrivals) {
+            if (output_droplets.erase(arrival.droplet) != 0) {
+                last_output_arrival = report.step;
+                ++output_arrivals;
+            }
+        }
+    }
+};
+
 struct TrialResult {
     dmf::ExperimentSummary metrics;
     int detour_searches;
     int synchronous_field_refreshes;
     std::string timeout;
+    std::string failure;
+    TrialMilestones milestones;
 };
 
 TrialResult runTrial(const ParallelCase& config, const std::vector<std::string>& outcomes,
                      dmf::BranchActivationMode mode,
                      dmf::CostFieldMode field_mode = dmf::CostFieldMode::Asynchronous,
-                     std::ostream* trace = nullptr) {
+                     std::ostream* trace = nullptr,
+                     const TrialSettings* override_settings = nullptr) {
     if (outcomes.size() != static_cast<std::size_t>(config.groups)) {
         throw std::invalid_argument("branch pattern does not match group count");
     }
@@ -128,13 +180,14 @@ TrialResult runTrial(const ParallelCase& config, const std::vector<std::string>&
     dmf::DropletPositions positions;
     dmf::VirtualChip chip(config.modules_per_side, config.modules_per_side, 3,
                          config.chip_side, config.chip_side);
+    const auto settings = override_settings ? *override_settings : TrialSettings{config.outputPort()};
     dmf::UpperLayer upper(
         dag, chip,
         {{dmf::OperationType::Dispense, {1, 1, 1}},
-         {dmf::OperationType::Mix, {3, 3, 3}},
-         {dmf::OperationType::Detect, {3, 3, 2}}},
+         {dmf::OperationType::Mix, {3, 3, settings.mix_cycles}},
+         {dmf::OperationType::Detect, {3, 3, settings.detect_cycles}}},
         positions,
-        {{dmf::OperationType::Output, config.outputPort()},
+        {{dmf::OperationType::Output, settings.output_port},
          {dmf::OperationType::Waste, config.wastePort()}},
         sourcePorts(config));
     dmf::Router router(chip.width(), chip.height(), positions, upper.minimumSeparation(),
@@ -156,14 +209,24 @@ TrialResult runTrial(const ParallelCase& config, const std::vector<std::string>&
     const auto mix = dag.operationFor(start_block, mixName(0));
     const auto detect = dag.operationFor(start_block, detectName(0));
     dmf::RouteDecisionTrace decision{watched_droplet};
+    TrialMilestones milestones;
+    std::string failure;
 
     using Clock = std::chrono::steady_clock;
     for (int step = 0; step < max_steps && !loop.allDone(); ++step) {
         const auto start = Clock::now();
-        const auto report = loop.step(trace ? &decision : nullptr);
+        dmf::StepReport report;
+        try {
+            report = loop.step(trace ? &decision : nullptr);
+        } catch (const std::exception& error) {
+            if (!override_settings) throw;
+            failure = error.what();
+            break;
+        }
         const auto micros = std::chrono::duration_cast<std::chrono::microseconds>(
             Clock::now() - start).count();
         metrics.observe(report, positions, micros);
+        if (override_settings) milestones.observe(report, dag);
         for (const auto block : report.activated_blocks) {
             if (dag.blockName(block) == "output") ++activated_outputs;
             else if (dag.blockName(block) == "waste") ++activated_waste;
@@ -180,7 +243,9 @@ TrialResult runTrial(const ParallelCase& config, const std::vector<std::string>&
         }
     }
     TrialResult result{metrics.summary(), router.detourSearches(),
-                       router.synchronousFieldRefreshes(), {}};
+                       router.synchronousFieldRefreshes(), {}, std::move(failure),
+                       std::move(milestones)};
+    if (!result.failure.empty()) return result;
     if (!loop.allDone()) {
         int waiting = 0;
         int placed = 0;
@@ -304,6 +369,98 @@ RunCounts runExperiments(std::ostream& out, const ParallelCase& config,
     return counts;
 }
 
+void checkOutputSeparation(const ParallelCase& config, dmf::Point output) {
+    for (const auto& entry : sourcePorts(config)) {
+        const auto inlet = entry.second;
+        if (std::max(std::abs(output.x - inlet.x), std::abs(output.y - inlet.y)) < 2) {
+            throw std::logic_error("sensitivity output port is too close to an inlet");
+        }
+    }
+}
+
+void checkSensitivityTimeline(const TrialResult& trial, int groups,
+                              dmf::BranchActivationMode mode) {
+    const auto& time = trial.milestones;
+    const int release_after = mode == dmf::BranchActivationMode::StaticBatch ?
+        time.last_detect : time.first_detect;
+    if (time.completed_detections != groups || time.output_arrivals != groups ||
+        time.first_detect <= 0 || time.last_detect < time.first_detect ||
+        time.first_output_move <= release_after ||
+        time.last_output_arrival < time.first_output_move ||
+        time.last_output_arrival + 1 != trial.metrics.steps) {
+        throw std::logic_error("sensitivity timeline has missing or out-of-order events");
+    }
+}
+
+int runSensitivity(const std::string& path) {
+    const auto config = *dmf::paper::caseForGroups(25);
+    const std::vector<std::string> outcomes(config.groups, "output");
+    struct Profile {
+        const char* name;
+        TrialSettings settings;
+    };
+    const std::array<Profile, 4> profiles{{
+        {"reference", {config.outputPort()}},
+        {"output_middle", {{59, 29}}},
+        {"mix_longer", {config.outputPort(), 6, 2}},
+        {"detect_longer", {config.outputPort(), 3, 4}}
+    }};
+    for (const auto& profile : profiles) checkOutputSeparation(config, profile.settings.output_port);
+
+    std::ofstream out(path);
+    if (!out) {
+        std::cerr << "cannot create " << path << '\n';
+        return 1;
+    }
+    out << "profile,repeat,chip_side,groups,output_x,output_y,mix_cycles,detect_cycles,mode,status,"
+           "steps,first_detect_step,last_detect_step,first_output_move_step,last_output_arrival_step,"
+           "route_requests,route_arrivals,error\n";
+    RunCounts counts;
+    for (const auto& profile : profiles) {
+        for (int repeat = 1; repeat <= 5; ++repeat) {
+            for (const auto mode : {dmf::BranchActivationMode::Immediate,
+                                    dmf::BranchActivationMode::StaticBatch}) {
+                const auto& s = profile.settings;
+                out << profile.name << ',' << repeat << ',' << config.chip_side << ',' << config.groups
+                    << ',' << s.output_port.x << ',' << s.output_port.y << ',' << s.mix_cycles
+                    << ',' << s.detect_cycles << ',' << modeName(mode) << ',';
+                try {
+                    const auto trial = runTrial(config, outcomes, mode, dmf::CostFieldMode::Asynchronous,
+                                                nullptr, &s);
+                    const char* status = "complete";
+                    if (!trial.failure.empty()) {
+                        status = "failed";
+                        ++counts.failed;
+                    } else if (!trial.timeout.empty()) {
+                        status = "timeout";
+                        ++counts.timeout;
+                    } else {
+                        checkSensitivityTimeline(trial, config.groups, mode);
+                        ++counts.complete;
+                    }
+                    const auto& time = trial.milestones;
+                    out << status << ','
+                        << trial.metrics.steps << ',' << time.first_detect << ',' << time.last_detect
+                        << ',' << time.first_output_move << ',' << time.last_output_arrival
+                        << ',' << trial.metrics.route_requests << ',' << trial.metrics.route_arrivals
+                        << ',' << csvText(trial.failure.empty() ? trial.timeout : trial.failure) << '\n';
+                } catch (const std::exception& error) {
+                    ++counts.failed;
+                    out << "failed,,,,,,,," << csvText(error.what()) << '\n';
+                }
+            }
+        }
+    }
+    out.close();
+    if (!out) {
+        std::cerr << "cannot write " << path << '\n';
+        return 1;
+    }
+    std::cout << "wrote " << path << "; complete=" << counts.complete
+              << ", timeout=" << counts.timeout << ", failed=" << counts.failed << '\n';
+    return counts.timeout == 0 && counts.failed == 0 ? 0 : 1;
+}
+
 int diagnose(const ParallelCase& config, const std::string& pattern,
              dmf::BranchActivationMode mode) {
     if (pattern.size() != static_cast<std::size_t>(config.groups) ||
@@ -373,6 +530,11 @@ int checkSeed1601() {
 
 int main(int argc, char** argv) {
     if (argc == 2 && std::string_view(argv[1]) == "--check-1601") return checkSeed1601();
+    if (argc >= 2 && std::string_view(argv[1]) == "--sensitivity") {
+        if (argc <= 3) return runSensitivity(argc == 3 ? argv[2] : "paper_parallel_sensitivity.csv");
+        std::cerr << "usage: dmf_paper_parallel_experiments --sensitivity [output.csv]\n";
+        return 2;
+    }
     int arg = 1;
     auto config = dmf::paper::caseForGroups(group_count);
     if (arg < argc && std::string_view(argv[arg]) == "--groups") {

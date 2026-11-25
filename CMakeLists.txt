@@ -108,6 +108,11 @@ add_test(NAME paper_parallel_15_scenario1 COMMAND dmf_paper_parallel_experiments
 add_test(NAME paper_parallel_25_scenario1 COMMAND dmf_paper_parallel_experiments --groups 25)
 add_test(NAME paper_parallel_batch_comparison COMMAND dmf_paper_parallel_experiments
          --compare paper_parallel_batch_check.csv)
+add_test(NAME paper_parallel_sensitivity
+         COMMAND ${CMAKE_COMMAND}
+         "-DEXPERIMENT=$<TARGET_FILE:dmf_paper_parallel_experiments>"
+         "-DCSV=${CMAKE_CURRENT_BINARY_DIR}/paper_parallel_sensitivity_check.csv"
+         -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/check_paper_sensitivity.cmake")
 add_test(NAME crossing_demo COMMAND am_dmf crossing)
 add_test(NAME async_demo COMMAND am_dmf async)
 add_test(NAME evacuation_demo COMMAND am_dmf evacuation)
