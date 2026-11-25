@@ -243,6 +243,7 @@ void Router::refreshUnusableField(CostFieldKey key, const std::array<Point, 4>& 
     field = CostFieldUpdater::build(key, *field_snapshot_);
     field_versions_.at(key) = field_snapshot_->version;
     ++field_builds_;
+    ++synchronous_field_refreshes_;
     field_updater_.cancel(key);
 }
 
@@ -415,6 +416,7 @@ std::optional<Point> Router::nextDetourMove(DropletId droplet, Point target,
     if (!detour.observeCycle(current) || !allowed(target)) return std::nullopt;
 
     // Search for this droplet only, with all other positions held at this snapshot.
+    ++detour_searches_;
     const int start = index(current);
     const int goal = index(target);
     std::vector<int> parent(blocked_.size(), -1);

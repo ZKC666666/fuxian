@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <array>
+#include <charconv>
 #include <chrono>
 #include <fstream>
 #include <iomanip>
@@ -23,6 +24,7 @@ using dmf::paper::detectName;
 using dmf::paper::sourcePorts;
 using dmf::paper::outcomesFor;
 using dmf::paper::feedbackFor;
+using dmf::paper::ParallelCase;
 constexpr int max_steps = 1000;
 constexpr dmf::DropletId watched_droplet = 1;
 constexpr char regression_pattern[] = "WOOOOOWWW";
@@ -93,26 +95,37 @@ void writeTraceStep(std::ostream& out, const dmf::StepReport& report,
     out << '\n';
 }
 
-dmf::ExperimentSummary runTrial(const std::vector<std::string>& outcomes,
-                                dmf::BranchActivationMode mode,
-                                dmf::CostFieldMode field_mode = dmf::CostFieldMode::Asynchronous,
-                                std::ostream* trace = nullptr) {
-    dmf::DynamicDag dag(dmf::paper::makeProtocol());
+struct TrialResult {
+    dmf::ExperimentSummary metrics;
+    int detour_searches;
+    int synchronous_field_refreshes;
+    std::string timeout;
+};
+
+TrialResult runTrial(const ParallelCase& config, const std::vector<std::string>& outcomes,
+                     dmf::BranchActivationMode mode,
+                     dmf::CostFieldMode field_mode = dmf::CostFieldMode::Asynchronous,
+                     std::ostream* trace = nullptr) {
+    if (outcomes.size() != static_cast<std::size_t>(config.groups)) {
+        throw std::invalid_argument("branch pattern does not match group count");
+    }
+    dmf::DynamicDag dag(dmf::paper::makeProtocol(config));
     const auto start_block = dag.activateStart({});
-    if (dag.operationCount() != 4 * group_count) {
+    if (dag.operationCount() != 4 * config.groups) {
         throw std::logic_error("wrong number of generated operations");
     }
     dmf::DropletPositions positions;
-    dmf::VirtualChip chip(4, 4, 3, 30, 30);
+    dmf::VirtualChip chip(config.modules_per_side, config.modules_per_side, 3,
+                         config.chip_side, config.chip_side);
     dmf::UpperLayer upper(
         dag, chip,
         {{dmf::OperationType::Dispense, {1, 1, 1}},
          {dmf::OperationType::Mix, {3, 3, 3}},
          {dmf::OperationType::Detect, {3, 3, 2}}},
         positions,
-        {{dmf::OperationType::Output, {29, 0}},
-         {dmf::OperationType::Waste, {0, 29}}},
-        sourcePorts());
+        {{dmf::OperationType::Output, config.outputPort()},
+         {dmf::OperationType::Waste, config.wastePort()}},
+        sourcePorts(config));
     dmf::Router router(chip.width(), chip.height(), positions, upper.minimumSeparation(),
                        field_mode);
     const auto feedback = feedbackFor(outcomes);
@@ -155,12 +168,14 @@ dmf::ExperimentSummary runTrial(const std::vector<std::string>& outcomes,
                            dag.operation(mix).state, dag.operation(detect).state);
         }
     }
+    TrialResult result{metrics.summary(), router.detourSearches(),
+                       router.synchronousFieldRefreshes(), {}};
     if (!loop.allDone()) {
         int waiting = 0;
         int placed = 0;
         int running = 0;
         int completed = 0;
-        for (int group = 0; group < group_count; ++group) {
+        for (int group = 0; group < config.groups; ++group) {
             for (const auto& name : {sourceName(group, 'a'), sourceName(group, 'b'),
                                      mixName(group), detectName(group)}) {
                 switch (dag.operation(dag.operationFor(start_block, name)).state) {
@@ -172,7 +187,7 @@ dmf::ExperimentSummary runTrial(const std::vector<std::string>& outcomes,
             }
         }
         std::ostringstream message;
-        message << "nine-mix trial timed out: waiting=" << waiting
+        message << config.groups << "-mix trial timed out: waiting=" << waiting
                 << " placed=" << placed << " running=" << running
                 << " completed=" << completed << " droplets=" << positions.size()
                 << " routes_active=" << router.hasTasks()
@@ -184,7 +199,7 @@ dmf::ExperimentSummary runTrial(const std::vector<std::string>& outcomes,
                 message << "->" << target->second.x << ':' << target->second.y;
             }
         }
-        for (int group = 0; group < group_count; ++group) {
+        for (int group = 0; group < config.groups; ++group) {
             for (const auto& name : {mixName(group), detectName(group)}) {
                 const auto state = dag.operation(dag.operationFor(start_block, name)).state;
                 if (state != dmf::OperationState::Completed) {
@@ -192,21 +207,23 @@ dmf::ExperimentSummary runTrial(const std::vector<std::string>& outcomes,
                 }
             }
         }
-        throw dmf::ExperimentTimeout(message.str());
+        result.timeout = message.str();
+        return result;
     }
-    if (!positions.empty() || dag.blockCount() != group_count + 1 ||
-        dag.operationCount() != 5 * group_count) {
-        throw std::logic_error("nine-mix trial did not finish cleanly");
+    if (!positions.empty() || dag.blockCount() != config.groups + 1 ||
+        dag.operationCount() != 5 * config.groups) {
+        throw std::logic_error("parallel trial did not finish cleanly");
     }
     const int expected_outputs = static_cast<int>(std::count(
         outcomes.begin(), outcomes.end(), "output"));
     if (activated_outputs != expected_outputs ||
-        activated_waste != group_count - expected_outputs) {
-        throw std::logic_error("nine-mix trial activated wrong branch counts");
+        activated_waste != config.groups - expected_outputs) {
+        throw std::logic_error("parallel trial activated wrong branch counts");
     }
-    const auto result = metrics.summary();
-    if (result.route_requests != result.route_arrivals) {
-        throw std::logic_error("nine-mix trial has unfinished routes");
+    const int expected_routes = 4 * config.groups;
+    if (result.metrics.route_requests != expected_routes ||
+        result.metrics.route_arrivals != expected_routes) {
+        throw std::logic_error("parallel trial completed with unexpected routing counts");
     }
     return result;
 }
@@ -217,17 +234,18 @@ struct RunCounts {
     int failed = 0;
 };
 
-RunCounts runExperiments(std::ostream& out, bool scenario_one_only) {
+RunCounts runExperiments(std::ostream& out, const ParallelCase& config,
+                         bool scenario_one_only) {
     RunCounts counts;
-    out << "scenario,output_probability,seed,outcome_pattern,realized_outputs,mode,status,"
+    out << "chip_side,groups,scenario,output_probability,seed,outcome_pattern,realized_outputs,mode,status,"
            "steps,route_requests,route_arrivals,throughput,plan_step_total_us,"
-           "loop_total_us,error\n";
+           "loop_total_us,detour_searches,synchronous_field_refreshes,error\n";
     out << std::fixed << std::setprecision(6);
     const std::array<int, 4> probabilities{100, 90, 70, 50};
     for (int scenario = 0; scenario < (scenario_one_only ? 1 : 4); ++scenario) {
         for (int repeat = 0; repeat < 5; ++repeat) {
             const unsigned seed = 1400U + static_cast<unsigned>(100 * scenario + repeat);
-            const auto outcomes = outcomesFor(probabilities[scenario], seed);
+            const auto outcomes = outcomesFor(config, probabilities[scenario], seed);
             const int realized = static_cast<int>(std::count(outcomes.begin(),
                                                              outcomes.end(), "output"));
             std::string pattern;
@@ -236,24 +254,27 @@ RunCounts runExperiments(std::ostream& out, bool scenario_one_only) {
             }
             for (const auto mode : {dmf::BranchActivationMode::Immediate,
                                     dmf::BranchActivationMode::AfterBatch}) {
-                out << scenario + 1 << ',' << probabilities[scenario] << ',' << seed
+                out << config.chip_side << ',' << config.groups << ',' << scenario + 1
+                    << ',' << probabilities[scenario] << ',' << seed
                     << ',' << pattern << ',' << realized << ','
                     << (mode == dmf::BranchActivationMode::Immediate ? "immediate"
                                                                      : "after_batch") << ',';
                 try {
-                    const auto result = runTrial(outcomes, mode);
-                    ++counts.complete;
-                    out << "complete," << result.steps << ',' << result.route_requests
+                    const auto trial = runTrial(config, outcomes, mode);
+                    const auto& result = trial.metrics;
+                    if (trial.timeout.empty()) ++counts.complete;
+                    else ++counts.timeout;
+                    out << (trial.timeout.empty() ? "complete," : "timeout,")
+                        << result.steps << ',' << result.route_requests
                         << ',' << result.route_arrivals << ','
                         << result.routingThroughput() << ','
-                        << result.routing_microseconds << ','
-                        << result.loop_microseconds << ",\"\"\n";
-                } catch (const dmf::ExperimentTimeout& error) {
-                    ++counts.timeout;
-                    out << "timeout,,,,,,," << csvText(error.what()) << '\n';
+                        << result.routing_microseconds << ',' << result.loop_microseconds
+                        << ',' << trial.detour_searches
+                        << ',' << trial.synchronous_field_refreshes
+                        << ',' << csvText(trial.timeout) << '\n';
                 } catch (const std::exception& error) {
                     ++counts.failed;
-                    out << "failed,,,,,,," << csvText(error.what()) << '\n';
+                    out << "failed,,,,,,,,," << csvText(error.what()) << '\n';
                 }
             }
         }
@@ -261,9 +282,11 @@ RunCounts runExperiments(std::ostream& out, bool scenario_one_only) {
     return counts;
 }
 
-int diagnose(const std::string& pattern) {
-    if (pattern.size() != group_count || pattern.find_first_not_of("OW") != std::string::npos) {
-        std::cerr << "diagnostic pattern must contain exactly nine O/W letters\n";
+int diagnose(const ParallelCase& config, const std::string& pattern,
+             dmf::BranchActivationMode mode) {
+    if (pattern.size() != static_cast<std::size_t>(config.groups) ||
+        pattern.find_first_not_of("OW") != std::string::npos) {
+        std::cerr << "diagnostic pattern must contain exactly " << config.groups << " O/W letters\n";
         return 2;
     }
     std::vector<std::string> outcomes;
@@ -278,16 +301,19 @@ int diagnose(const std::string& pattern) {
                                   dmf::CostFieldMode::WaitForLatest}) {
         const auto label = field_mode == dmf::CostFieldMode::Asynchronous ? "async" : "fresh";
         std::ostringstream trace;
-        trace << "pattern=" << pattern << " mode=immediate field_mode=" << label
+        trace << "groups=" << config.groups << " pattern=" << pattern
+              << " mode=" << (mode == dmf::BranchActivationMode::Immediate ? "immediate" : "after_batch")
+              << " field_mode=" << label
               << " watched_droplet=" << watched_droplet << '\n';
         std::string result;
         try {
-            const auto summary = runTrial(outcomes, dmf::BranchActivationMode::Immediate,
-                                          field_mode, &trace);
-            result = "complete, steps=" + std::to_string(summary.steps);
-        } catch (const dmf::ExperimentTimeout& error) {
-            all_complete = false;
-            result = std::string("timeout: ") + error.what();
+            const auto trial = runTrial(config, outcomes, mode, field_mode, &trace);
+            if (trial.timeout.empty()) {
+                result = "complete, steps=" + std::to_string(trial.metrics.steps);
+            } else {
+                all_complete = false;
+                result = "timeout: " + trial.timeout;
+            }
         } catch (const std::exception& error) {
             all_complete = false;
             result = std::string("failed: ") + error.what();
@@ -309,12 +335,11 @@ int checkSeed1601() {
         outcomes.emplace_back(branch == 'O' ? "output" : "waste");
     }
     try {
-        const auto summary = runTrial(outcomes, dmf::BranchActivationMode::Immediate,
-                                      dmf::CostFieldMode::WaitForLatest);
-        if (summary.route_requests != 36 || summary.route_arrivals != 36) {
-            throw std::logic_error("seed 1601 should complete all 36 routing tasks");
-        }
-        std::cout << "seed 1601 complete, steps=" << summary.steps << '\n';
+        const auto trial = runTrial(*dmf::paper::caseForGroups(group_count), outcomes,
+                                    dmf::BranchActivationMode::Immediate,
+                                    dmf::CostFieldMode::WaitForLatest);
+        if (!trial.timeout.empty()) throw dmf::ExperimentTimeout(trial.timeout);
+        std::cout << "seed 1601 complete, steps=" << trial.metrics.steps << '\n';
         return 0;
     } catch (const std::exception& error) {
         std::cerr << "seed 1601: " << error.what() << '\n';
@@ -326,26 +351,51 @@ int checkSeed1601() {
 
 int main(int argc, char** argv) {
     if (argc == 2 && std::string_view(argv[1]) == "--check-1601") return checkSeed1601();
-    if (argc > 1 && std::string(argv[1]) == "--diagnose") {
-        if (argc <= 3) return diagnose(argc == 3 ? argv[2] : regression_pattern);
-        std::cerr << "usage: dmf_paper_parallel_experiments --diagnose [OOOOOOOOW]\n";
+    int arg = 1;
+    auto config = dmf::paper::caseForGroups(group_count);
+    if (arg < argc && std::string_view(argv[arg]) == "--groups") {
+        if (++arg == argc) {
+            std::cerr << "--groups requires a supported group count\n";
+            return 2;
+        }
+        const std::string_view count(argv[arg++]);
+        int groups = 0;
+        const auto parsed = std::from_chars(count.data(), count.data() + count.size(), groups);
+        if (parsed.ec != std::errc{} || parsed.ptr != count.data() + count.size() ||
+            !(config = dmf::paper::caseForGroups(groups))) {
+            std::cerr << "unsupported group count: " << count << '\n';
+            return 2;
+        }
+    }
+    if (arg < argc && std::string_view(argv[arg]) == "--diagnose") {
+        ++arg;
+        const std::string pattern = arg < argc ? argv[arg++] :
+            (config->groups == group_count ? regression_pattern : std::string(config->groups, 'O'));
+        auto mode = dmf::BranchActivationMode::Immediate;
+        if (arg < argc && std::string_view(argv[arg]) == "after_batch") {
+            mode = dmf::BranchActivationMode::AfterBatch;
+            ++arg;
+        }
+        if (arg == argc) return diagnose(*config, pattern, mode);
+        std::cerr << "usage: dmf_paper_parallel_experiments [--groups N] --diagnose [pattern] [after_batch]\n";
         return 2;
     }
-    const bool all_scenarios = argc > 1 && std::string(argv[1]) == "--all";
-    if (argc > (all_scenarios ? 3 : 2)) {
-        std::cerr << "usage: dmf_paper_parallel_experiments [--all] [output.csv]\n";
+    const bool all_scenarios = arg < argc && std::string_view(argv[arg]) == "--all";
+    if (all_scenarios) ++arg;
+    if (argc - arg > 1 || (arg < argc && std::string_view(argv[arg]).substr(0, 2) == "--")) {
+        std::cerr << "usage: dmf_paper_parallel_experiments [--groups N] [--all] [output.csv]\n";
         return 2;
     }
-    const std::string path = argc == (all_scenarios ? 3 : 2)
-                                 ? argv[argc - 1]
-                                 : (all_scenarios ? "paper_parallel_trials.csv"
-                                                  : "paper_parallel_scenario1.csv");
+    std::string prefix = "paper_parallel_";
+    if (config->groups != group_count) prefix += std::to_string(config->groups) + '_';
+    const std::string path = arg < argc ? argv[arg] :
+        prefix + (all_scenarios ? "trials.csv" : "scenario1.csv");
     std::ofstream output(path);
     if (!output) {
         std::cerr << "cannot create " << path << '\n';
         return 1;
     }
-    const auto counts = runExperiments(output, !all_scenarios);
+    const auto counts = runExperiments(output, *config, !all_scenarios);
     if (!output) {
         std::cerr << "failed to write " << path << '\n';
         return 1;

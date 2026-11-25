@@ -2,7 +2,7 @@
 
 本工程依据论文 [A Two-Layer Decoupled Synthesis Framework for Uncertain Biochemical Protocols on Active-Matrix Digital Microfluidic Platforms](https://doi.org/10.1109/TCAD.2026.3721419) 逐步复现。论文给出了框架和伪代码，没有公开完整实现与实验生成程序。工程使用 C++17，文档使用中文。
 
-当前 `main` 分支处于 **v1.6：修复 30×30 案例的短循环和旧代价场等待**。每个正式版本都用 Git 标签保存，桌面的 `PROJECT/versions/版本号` 是可独立用 Visual Studio 打开的源码副本。此前的探索原型保存在 Git 标签 `v0.0-prototype`。
+当前 `main` 分支处于 **v1.7：扩展第一类协议到 60×60 阵列的 15 组和 25 组混合**。每个正式版本都用 Git 标签保存，桌面的 `PROJECT/versions/版本号` 是可独立用 Visual Studio 打开的源码副本。此前的探索原型保存在 Git 标签 `v0.0-prototype`。
 
 ## 先理解两个图
 
@@ -360,6 +360,40 @@ Router 先比较下一格的代价，同分时比较再往前一步能达到的�
 - 在两版都完成的 181 对试验中，平均控制步从 **113.50** 降至 **62.90**，平均每次试验的 Router 决策累计耗时从 **750.36 μs** 降至 **624.34 μs**。用累计决定耗时除以总控制步，约从 **6.61 μs/步** 升至 **9.93 μs/步**，其中包括没有调用 Router 决策的控制步。这些数字只描述这批仿真，仍受机器和线程调度影响。
 
 在 Visual Studio 打开 `PROJECT/versions/v1.6`，选择 `dmf_paper_parallel_experiments.exe`。不传参运行全部 Output 场景，`--check-1601` 运行固定回归，`--diagnose` 输出两种代价场模式的完整轨迹，`--all` 生成 40 次试验的 CSV。
+
+## v1.7 第一类协议的三个规模
+
+用同一个实验入口运行论文 Table I 的三个阵列和混合组数设置。30×30 沿用 v1.6 的模块和端口。60×60 使用 9 行×9 列的候选模块，每个模块占 3×3 个电极。模块之间留出 3 格宽的通道。入口按左、右、上、下的顺序轮流分配，均匀选取同一边上的模块对齐位置。两个终点口设在 `(59,0)` 和 `(0,59)`。模块和端口的具体坐标沿用本工程设定。
+
+| 阵列 | 混合组数 | 候选模块数 | 入口数及各边对数（左、右、上、下） | 每次应到达的路由任务 |
+| --- | ---: | ---: | --- | ---: |
+| 30×30 | 9 | 16 | 18 个，3、3、2、1 对 | 36 |
+| 60×60 | 15 | 81 | 30 个，4、4、4、3 对 | 60 |
+| 60×60 | 25 | 81 | 50 个，7、6、6、6 对 | 100 |
+
+所有规模沿用原来的安全距离和仿真操作时长。每次成功结束都检查操作数、分支数、准确的路由到达数以及阵列中是否还有剩余液滴。CSV 增加了 `chip_side`、`groups`、`detour_searches`（开始搜索绕行路径次数）和 `synchronous_field_refreshes`（因旧场无可用方向而同步重算次数）。超时记录保留前 1000 步累计的任务数、用时、搜索计数和未完成操作。
+
+在 Visual Studio 打开 `PROJECT/versions/v1.7`，生成并选择 `dmf_paper_parallel_experiments.exe`。在启动参数中填写下列命令中可执行文件后面的部分，也可在生成目录的 PowerShell 直接运行。
+
+```powershell
+.\dmf_paper_parallel_experiments.exe --groups 15
+.\dmf_paper_parallel_experiments.exe --groups 15 --all
+.\dmf_paper_parallel_experiments.exe --groups 25 --all
+```
+
+不带 `--all` 时只跑全 Output 场景的 10 次试验，带 `--all` 时跑四种场景的 40 次试验。默认仍选 9 组。`--groups 25 --diagnose WWWWOWWOWWOWOOOOWOOOOWOOO after_batch` 可以按 CSV 中的分支串和调度模式重跑一个案例，并记录异步更新与每步等待最新代价场的两段轨迹。
+
+### 五轮 Release 对照
+
+每个规模每轮用同样的 20 串检测结果，各自运行两种调度模式。五轮共 **600 次**，全部完成。表中的耗时是一轮协议从开始到结束的 Router 决策累计耗时，再对对应的 100 次取平均。重复运行用于观察同一组输入下的行为波动。
+
+| 组数 | `immediate` 平均控制步 | `after_batch` 平均控制步 | `immediate` 平均路由决策耗时 | `after_batch` 平均路由决策耗时 |
+| --- | ---: | ---: | ---: | ---: |
+| 9 | 61.00 | 64.50 | 0.607 ms | 0.560 ms |
+| 15 | 119.60 | 123.20 | 2.159 ms | 2.050 ms |
+| 25 | 130.40 | 136.60 | 4.195 ms | 3.821 ms |
+
+25 组的 `immediate` 和 `after_batch` 分别触发 50 次和 180 次绕行搜索，分别同步重算了 620 次和 0 次。这些计数说明在当前布局下，较大规模会用到 v1.6 的补充规则。耗时也随机器和线程调度变化。`after_batch` 仍是批次等待对照，论文对照方法中的整体合成步骤尚待补齐。
 
 ## 编译与运行
 

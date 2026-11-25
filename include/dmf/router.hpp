@@ -74,6 +74,8 @@ public:
     int costFieldBuilds() const { return field_builds_; }
     int asyncFieldSwaps() const { return async_field_swaps_; }
     int staleFieldDecisions() const { return stale_field_decisions_; }
+    int detourSearches() const { return detour_searches_; }
+    int synchronousFieldRefreshes() const { return synchronous_field_refreshes_; }
     const std::set<int>& activationHolds() const { return activation_holds_; }
     const std::map<DropletId, int>& crossingModules() const {
         return crossing_modules_;
@@ -139,6 +141,8 @@ private:
     int field_builds_ = 0;
     int async_field_swaps_ = 0;
     int stale_field_decisions_ = 0;
+    int detour_searches_ = 0;
+    int synchronous_field_refreshes_ = 0;
 
     bool contains(Point point) const;
     int index(Point point) const;
