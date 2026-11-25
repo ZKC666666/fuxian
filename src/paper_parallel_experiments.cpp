@@ -29,6 +29,15 @@ constexpr int max_steps = 1000;
 constexpr dmf::DropletId watched_droplet = 1;
 constexpr char regression_pattern[] = "WOOOOOWWW";
 
+const char* modeName(dmf::BranchActivationMode mode) {
+    switch (mode) {
+        case dmf::BranchActivationMode::Immediate: return "immediate";
+        case dmf::BranchActivationMode::AfterBatch: return "after_batch";
+        case dmf::BranchActivationMode::StaticBatch: return "static_batch";
+    }
+    throw std::logic_error("unknown branch mode");
+}
+
 std::string csvText(const std::string& value) {
     std::string quoted = "\"";
     for (const char c : value) {
@@ -62,6 +71,8 @@ void writeTraceStep(std::ostream& out, const dmf::StepReport& report,
     out << "step=" << report.step << " mix_0=" << stateName(mix)
         << " detect_0=" << stateName(detect)
         << " stale_uses=" << report.stale_field_decisions;
+    if (report.batch_plans != 0) out << " planned_route_steps=" << report.planned_route_steps;
+    if (report.replayed_route_steps != 0) out << " replayed_terminal_moves";
     out << " positions_end:";
     for (const auto& [droplet, position] : positions) {
         out << " d" << droplet << '@';
@@ -225,6 +236,12 @@ TrialResult runTrial(const ParallelCase& config, const std::vector<std::string>&
         result.metrics.route_arrivals != expected_routes) {
         throw std::logic_error("parallel trial completed with unexpected routing counts");
     }
+    if (mode == dmf::BranchActivationMode::StaticBatch &&
+        (result.metrics.batch_plans != 1 ||
+         result.metrics.planned_route_steps !=
+             static_cast<std::size_t>(result.metrics.replayed_route_steps))) {
+        throw std::logic_error("static trial did not replay its complete terminal plan");
+    }
     return result;
 }
 
@@ -235,11 +252,12 @@ struct RunCounts {
 };
 
 RunCounts runExperiments(std::ostream& out, const ParallelCase& config,
-                         bool scenario_one_only) {
+                         bool scenario_one_only, bool compare_static) {
     RunCounts counts;
     out << "chip_side,groups,scenario,output_probability,seed,outcome_pattern,realized_outputs,mode,status,"
            "steps,route_requests,route_arrivals,throughput,plan_step_total_us,"
-           "loop_total_us,detour_searches,synchronous_field_refreshes,error\n";
+           "loop_total_us,detour_searches,synchronous_field_refreshes,batch_planning_us,"
+           "replay_us,batch_plans,planned_route_steps,replayed_route_steps,error\n";
     out << std::fixed << std::setprecision(6);
     const std::array<int, 4> probabilities{100, 90, 70, 50};
     for (int scenario = 0; scenario < (scenario_one_only ? 1 : 4); ++scenario) {
@@ -253,12 +271,13 @@ RunCounts runExperiments(std::ostream& out, const ParallelCase& config,
                 pattern += outcome == "output" ? 'O' : 'W';
             }
             for (const auto mode : {dmf::BranchActivationMode::Immediate,
-                                    dmf::BranchActivationMode::AfterBatch}) {
+                                    dmf::BranchActivationMode::AfterBatch,
+                                    dmf::BranchActivationMode::StaticBatch}) {
+                if (!compare_static && mode == dmf::BranchActivationMode::StaticBatch) continue;
                 out << config.chip_side << ',' << config.groups << ',' << scenario + 1
                     << ',' << probabilities[scenario] << ',' << seed
                     << ',' << pattern << ',' << realized << ','
-                    << (mode == dmf::BranchActivationMode::Immediate ? "immediate"
-                                                                     : "after_batch") << ',';
+                    << modeName(mode) << ',';
                 try {
                     const auto trial = runTrial(config, outcomes, mode);
                     const auto& result = trial.metrics;
@@ -271,10 +290,13 @@ RunCounts runExperiments(std::ostream& out, const ParallelCase& config,
                         << result.routing_microseconds << ',' << result.loop_microseconds
                         << ',' << trial.detour_searches
                         << ',' << trial.synchronous_field_refreshes
+                        << ',' << result.batch_planning_microseconds << ',' << result.replay_microseconds
+                        << ',' << result.batch_plans << ',' << result.planned_route_steps
+                        << ',' << result.replayed_route_steps
                         << ',' << csvText(trial.timeout) << '\n';
                 } catch (const std::exception& error) {
                     ++counts.failed;
-                    out << "failed,,,,,,,,," << csvText(error.what()) << '\n';
+                    out << "failed,,,,,,,,,,,,,," << csvText(error.what()) << '\n';
                 }
             }
         }
@@ -302,7 +324,7 @@ int diagnose(const ParallelCase& config, const std::string& pattern,
         const auto label = field_mode == dmf::CostFieldMode::Asynchronous ? "async" : "fresh";
         std::ostringstream trace;
         trace << "groups=" << config.groups << " pattern=" << pattern
-              << " mode=" << (mode == dmf::BranchActivationMode::Immediate ? "immediate" : "after_batch")
+              << " mode=" << modeName(mode)
               << " field_mode=" << label
               << " watched_droplet=" << watched_droplet << '\n';
         std::string result;
@@ -375,27 +397,32 @@ int main(int argc, char** argv) {
         if (arg < argc && std::string_view(argv[arg]) == "after_batch") {
             mode = dmf::BranchActivationMode::AfterBatch;
             ++arg;
+        } else if (arg < argc && std::string_view(argv[arg]) == "static_batch") {
+            mode = dmf::BranchActivationMode::StaticBatch;
+            ++arg;
         }
         if (arg == argc) return diagnose(*config, pattern, mode);
-        std::cerr << "usage: dmf_paper_parallel_experiments [--groups N] --diagnose [pattern] [after_batch]\n";
+        std::cerr << "usage: dmf_paper_parallel_experiments [--groups N] --diagnose [pattern] [after_batch|static_batch]\n";
         return 2;
     }
-    const bool all_scenarios = arg < argc && std::string_view(argv[arg]) == "--all";
+    const bool compare_static = arg < argc && std::string_view(argv[arg]) == "--compare";
+    const bool all_scenarios = compare_static ||
+        (arg < argc && std::string_view(argv[arg]) == "--all");
     if (all_scenarios) ++arg;
     if (argc - arg > 1 || (arg < argc && std::string_view(argv[arg]).substr(0, 2) == "--")) {
-        std::cerr << "usage: dmf_paper_parallel_experiments [--groups N] [--all] [output.csv]\n";
+        std::cerr << "usage: dmf_paper_parallel_experiments [--groups N] [--all|--compare] [output.csv]\n";
         return 2;
     }
     std::string prefix = "paper_parallel_";
     if (config->groups != group_count) prefix += std::to_string(config->groups) + '_';
     const std::string path = arg < argc ? argv[arg] :
-        prefix + (all_scenarios ? "trials.csv" : "scenario1.csv");
+        prefix + (compare_static ? "comparison.csv" : all_scenarios ? "trials.csv" : "scenario1.csv");
     std::ofstream output(path);
     if (!output) {
         std::cerr << "cannot create " << path << '\n';
         return 1;
     }
-    const auto counts = runExperiments(output, *config, !all_scenarios);
+    const auto counts = runExperiments(output, *config, !all_scenarios, compare_static);
     if (!output) {
         std::cerr << "failed to write " << path << '\n';
         return 1;

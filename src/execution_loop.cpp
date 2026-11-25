@@ -1,6 +1,7 @@
 #include "dmf/execution_loop.hpp"
 
 #include <chrono>
+#include <set>
 #include <stdexcept>
 #include <utility>
 
@@ -27,6 +28,9 @@ ExecutionLoop::ExecutionLoop(DynamicDag& dag, UpperLayer& upper, Router& router,
     }
     if (upper_.minimumSeparation() != router_.minimumSeparation()) {
         throw std::invalid_argument("upper layer and router separation must match");
+    }
+    if (branch_mode_ == BranchActivationMode::StaticBatch && movement_provider_) {
+        throw std::invalid_argument("static terminal batches require ideal movement feedback");
     }
 }
 
@@ -69,6 +73,26 @@ void ExecutionLoop::prepareCrossings(StepReport& report) {
     report.connectivity_check_microseconds += elapsedMicroseconds(start);
 }
 
+void ExecutionLoop::prepareTerminalBatch(StepReport& report) {
+    if (terminal_plan_ || router_.hasTasks() || !remaining_cycles_.empty() ||
+        report.routing_tasks.size() != report.activated_blocks.size()) {
+        throw std::logic_error("static mode requires one terminal operation per released branch");
+    }
+    std::set<BlockInstanceId> released(report.activated_blocks.begin(), report.activated_blocks.end());
+    for (const auto& task : report.routing_tasks) {
+        const auto type = dag_.operationType(task.operation);
+        if ((type != OperationType::Output && type != OperationType::Waste) ||
+            released.erase(dag_.operation(task.operation).block_instance) != 1) {
+            throw std::logic_error("static mode only plans terminal Output and Waste branches");
+        }
+    }
+    const auto start = Clock::now();
+    terminal_plan_ = router_.planTerminalBatch(report.routing_tasks);
+    report.batch_planning_microseconds = elapsedMicroseconds(start);
+    report.batch_plans = 1;
+    report.planned_route_steps = terminal_plan_->size();
+}
+
 StepReport ExecutionLoop::step(RouteDecisionTrace* trace) {
     StepReport report;
     report.step = ++step_count_;
@@ -81,6 +105,9 @@ StepReport ExecutionLoop::step(RouteDecisionTrace* trace) {
     const auto running_before = remaining_cycles_;
 
     report.routing_tasks = upper_.placeReadyOperations();
+    if (branch_mode_ == BranchActivationMode::StaticBatch && !report.activated_blocks.empty()) {
+        prepareTerminalBatch(report);
+    }
     const auto immediate_arrivals = router_.addTasks(report.routing_tasks);
     updateBlockages(report);
     prepareCrossings(report);
@@ -91,8 +118,17 @@ StepReport ExecutionLoop::step(RouteDecisionTrace* trace) {
 
     if (router_.hasTasks()) {
         const auto routing_start = Clock::now();
-        report.moves = router_.planStep(trace);
-        report.routing_microseconds = elapsedMicroseconds(routing_start);
+        if (terminal_plan_) {
+            report.moves = terminal_plan_->at(next_planned_step_);
+            router_.replayTerminalStep(report.moves);
+            ++next_planned_step_;
+            report.replayed_route_steps = 1;
+            report.replay_microseconds = elapsedMicroseconds(routing_start);
+            if (trace) *trace = RouteDecisionTrace{trace->droplet};
+        } else {
+            report.moves = router_.planStep(trace);
+            report.routing_microseconds = elapsedMicroseconds(routing_start);
+        }
         report.evacuation_targets = router_.evacuationTargets();
         report.crossing_modules = router_.crossingModules();
         report.waiting_for_crossing = router_.waitingForCrossing();
@@ -107,6 +143,9 @@ StepReport ExecutionLoop::step(RouteDecisionTrace* trace) {
             report.observed.push_back({move.droplet, position});
         }
         const auto arrivals = router_.applyFeedback(report.observed);
+        if (terminal_plan_ && !router_.hasTasks() && next_planned_step_ != terminal_plan_->size()) {
+            throw std::logic_error("terminal plan contains unused steps");
+        }
         prepareCrossings(report);
         acceptArrivals(arrivals, report);
         report.evacuated = router_.evacuatedLastStep();

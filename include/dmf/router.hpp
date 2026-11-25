@@ -33,6 +33,8 @@ struct MoveFeedback {
     Point observed;
 };
 
+using TerminalBatchPlan = std::vector<std::vector<MoveCommand>>;
+
 enum class CostFieldMode { Asynchronous, WaitForLatest };
 
 struct RouteCandidateTrace {
@@ -65,6 +67,8 @@ public:
     void setBlockages(const std::vector<VirtualModule>& modules);
     void setUpcomingBlockages(const std::vector<UpcomingBlockage>& modules);
     std::vector<MoveCommand> planStep(RouteDecisionTrace* trace = nullptr);
+    TerminalBatchPlan planTerminalBatch(const std::vector<RoutingTask>& tasks) const;
+    void replayTerminalStep(const std::vector<MoveCommand>& moves);
     std::vector<RouteArrival> applyFeedback(const std::vector<MoveFeedback>& feedback);
     void prepareUpcomingCrossings();
     void waitForCostFieldUpdates();  // Explicit barrier for reproducible experiments.

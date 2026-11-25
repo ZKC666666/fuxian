@@ -129,6 +129,31 @@ void sharedTargetReusesOneField() {
           "droplets with the same target built duplicate BFS fields");
 }
 
+void terminalPlanningKeepsAnAlreadyArrivedDropletUntilConsumed() {
+    const dmf::Point port{8, 4};
+    const dmf::Point second_start{6, 4};
+    dmf::DropletPositions positions{{1, port}, {2, second_start}};
+    dmf::Router router(9, 9, positions);
+    const std::vector<dmf::RoutingTask> tasks{{1, 1, port, 0}, {2, 2, port, 0}};
+    const auto plan = router.planTerminalBatch(tasks);
+    check(!router.hasTasks() && positions.at(1) == port && positions.at(2) == second_start,
+          "batch planning changed the live state");
+    check(plan.size() > 2, "batch plan ignored terminal occupancy");
+    const auto initial_arrivals = router.addTasks(tasks);
+    check(initial_arrivals.size() == 1 && initial_arrivals[0].droplet == 1,
+          "droplet already at the port should be available immediately");
+
+    for (std::size_t i = 0; i < plan.size(); ++i) {
+        router.replayTerminalStep(plan[i]);
+        const auto arrivals = router.applyFeedback({{2, plan[i].at(0).to}});
+        if (i == 1) positions.erase(1);
+        if (i + 1 != plan.size()) check(arrivals.empty(), "second droplet arrived too soon");
+        else check(arrivals.size() == 1 && arrivals.front().droplet == 2,
+                   "second droplet did not reach the released port");
+    }
+    check(!router.hasTasks() && positions.at(2) == port, "terminal replay did not finish");
+}
+
 }  // namespace
 
 int main() {
@@ -138,6 +163,7 @@ int main() {
         opposingDropletsKeepTheirDistance();
         invalidFeedbackLeavesStateUnchanged();
         sharedTargetReusesOneField();
+        terminalPlanningKeepsAnAlreadyArrivedDropletUntilConsumed();
         std::cout << "router tests: passed\n";
     } catch (const std::exception& error) {
         std::cerr << "router tests: " << error.what() << '\n';

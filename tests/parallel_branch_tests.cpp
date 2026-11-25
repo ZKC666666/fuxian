@@ -247,11 +247,32 @@ void completePhysicalScenario(const std::string& a, const std::string& b,
     int first_branch_step = 0;
     int b_complete_step = 0;
     std::vector<std::string> activated;
+    int batch_plans = 0;
+    std::size_t planned_steps = 0;
+    std::size_t replayed_steps = 0;
+    std::vector<int> terminal_starts;
     int steps = 0;
     for (; steps < 300 && !loop.allDone(); ++steps) {
         const auto report = loop.step();
         if (std::find(report.completed.begin(), report.completed.end(), detect_b) !=
             report.completed.end()) b_complete_step = report.step;
+        if (report.batch_plans != 0) {
+            check(report.activated_blocks.size() == 2 && report.step > b_complete_step,
+                  "static planning began before both detection results were available");
+        }
+        batch_plans += report.batch_plans;
+        planned_steps += report.planned_route_steps;
+        replayed_steps += report.replayed_route_steps;
+        if (report.replayed_route_steps != 0) {
+            check(batch_plans == 1 && report.routing_microseconds == 0,
+                  "terminal moves were computed again during replay");
+        }
+        for (const auto op : report.started) {
+            const auto type = dag.operationType(op);
+            if (type == dmf::OperationType::Output || type == dmf::OperationType::Waste) {
+                terminal_starts.push_back(report.step);
+            }
+        }
         for (const auto block : report.activated_blocks) {
             if (first_branch_step == 0) first_branch_step = report.step;
             activated.push_back(dag.blockName(block));
@@ -279,6 +300,13 @@ void completePhysicalScenario(const std::string& a, const std::string& b,
         check(!a_activated_before_b_completed && first_branch_step > b_complete_step,
               "batch mode activated a branch before the batch completed");
     }
+    if (mode == dmf::BranchActivationMode::StaticBatch) {
+        check(batch_plans == 1 && planned_steps > 0 && planned_steps == replayed_steps,
+              "static mode did not prepare and replay exactly one complete plan");
+        check(terminal_starts.size() == 2 &&
+                  (a != b || terminal_starts[1] > terminal_starts[0] + 1),
+              "two droplets used a shared terminal before it was released");
+    }
 }
 
 }  // namespace
@@ -294,6 +322,7 @@ int main() {
             for (const std::string& b : {"output", "waste"}) {
                 completePhysicalScenario(a, b, dmf::BranchActivationMode::Immediate);
                 completePhysicalScenario(a, b, dmf::BranchActivationMode::AfterBatch);
+                completePhysicalScenario(a, b, dmf::BranchActivationMode::StaticBatch);
             }
         }
         std::cout << "parallel branch tests: passed\n";

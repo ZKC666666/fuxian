@@ -16,7 +16,7 @@ struct CompletionFeedback {
     std::optional<std::string> outcome;
 };
 
-enum class BranchActivationMode { Immediate, AfterBatch };
+enum class BranchActivationMode { Immediate, AfterBatch, StaticBatch };
 
 struct StepReport {
     int step = 0;
@@ -39,6 +39,11 @@ struct StepReport {
     int async_field_swaps = 0;
     int stale_field_decisions = 0;
     long long routing_microseconds = 0;
+    long long batch_planning_microseconds = 0;
+    long long replay_microseconds = 0;
+    int batch_plans = 0;
+    std::size_t planned_route_steps = 0;
+    int replayed_route_steps = 0;
     long long connectivity_check_microseconds = 0;
     long long blockage_update_microseconds = 0;
 };
@@ -73,12 +78,15 @@ private:
     std::map<OperationInstanceId, int> remaining_cycles_;
     std::map<OperationInstanceId, CompletionFeedback> pending_completion_;
     int step_count_ = 0;
+    std::optional<TerminalBatchPlan> terminal_plan_;
+    std::size_t next_planned_step_ = 0;
 
     void recordStart(OperationInstanceId operation, StepReport& report);
     void acceptArrivals(const std::vector<RouteArrival>& arrivals, StepReport& report);
     void acceptStarts(const std::vector<OperationInstanceId>& started, StepReport& report);
     void updateBlockages(StepReport& report);
     void prepareCrossings(StepReport& report);
+    void prepareTerminalBatch(StepReport& report);
 };
 
 }  // namespace dmf

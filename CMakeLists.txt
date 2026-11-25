@@ -7,7 +7,8 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 add_library(dmf_core src/protocol.cpp src/dynamic_dag.cpp src/placement.cpp
                      src/upper_layer.cpp src/router.cpp src/cost_field_updater.cpp
-                     src/execution_loop.cpp src/experiment_metrics.cpp)
+                     src/execution_loop.cpp src/experiment_metrics.cpp
+                     src/terminal_batch_plan.cpp)
 target_include_directories(dmf_core PUBLIC include)
 find_package(Threads REQUIRED)
 target_link_libraries(dmf_core PUBLIC Threads::Threads)
@@ -105,6 +106,8 @@ add_test(NAME paper_parallel_scenario1 COMMAND dmf_paper_parallel_experiments
 add_test(NAME paper_parallel_seed1601 COMMAND dmf_paper_parallel_experiments --check-1601)
 add_test(NAME paper_parallel_15_scenario1 COMMAND dmf_paper_parallel_experiments --groups 15)
 add_test(NAME paper_parallel_25_scenario1 COMMAND dmf_paper_parallel_experiments --groups 25)
+add_test(NAME paper_parallel_batch_comparison COMMAND dmf_paper_parallel_experiments
+         --compare paper_parallel_batch_check.csv)
 add_test(NAME crossing_demo COMMAND am_dmf crossing)
 add_test(NAME async_demo COMMAND am_dmf async)
 add_test(NAME evacuation_demo COMMAND am_dmf evacuation)

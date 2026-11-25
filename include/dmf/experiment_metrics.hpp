@@ -20,6 +20,11 @@ struct ExperimentSummary {
     long long routing_peak_microseconds = 0;
     long long loop_microseconds = 0;
     long long loop_peak_microseconds = 0;
+    long long batch_planning_microseconds = 0;
+    long long replay_microseconds = 0;
+    int batch_plans = 0;
+    std::size_t planned_route_steps = 0;
+    int replayed_route_steps = 0;
 
     double routingThroughput() const;
 };

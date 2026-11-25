@@ -50,6 +50,11 @@ void ExperimentMetrics::observe(const StepReport& report,
     summary_.route_arrivals += static_cast<int>(report.route_arrivals.size());
     if (!report.waiting_for_output_space.empty()) ++summary_.output_wait_steps;
     summary_.routing_microseconds += report.routing_microseconds;
+    summary_.batch_planning_microseconds += report.batch_planning_microseconds;
+    summary_.replay_microseconds += report.replay_microseconds;
+    summary_.batch_plans += report.batch_plans;
+    summary_.planned_route_steps += report.planned_route_steps;
+    summary_.replayed_route_steps += report.replayed_route_steps;
     summary_.routing_peak_microseconds =
         std::max(summary_.routing_peak_microseconds, report.routing_microseconds);
     summary_.loop_microseconds += loop_microseconds;
