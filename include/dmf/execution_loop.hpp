@@ -57,7 +57,7 @@ public:
                   std::vector<VirtualModule> fixed_blockages = {},
                   BranchActivationMode branch_mode = BranchActivationMode::Immediate);
 
-    StepReport step();
+    StepReport step(RouteDecisionTrace* trace = nullptr);
     void completeEarly(OperationInstanceId operation, CompletionFeedback feedback);
     bool allDone() const;
     int remainingCycles(OperationInstanceId operation) const;

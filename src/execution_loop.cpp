@@ -69,7 +69,7 @@ void ExecutionLoop::prepareCrossings(StepReport& report) {
     report.connectivity_check_microseconds += elapsedMicroseconds(start);
 }
 
-StepReport ExecutionLoop::step() {
+StepReport ExecutionLoop::step(RouteDecisionTrace* trace) {
     StepReport report;
     report.step = ++step_count_;
     const int fields_before = router_.costFieldBuilds();
@@ -91,7 +91,7 @@ StepReport ExecutionLoop::step() {
 
     if (router_.hasTasks()) {
         const auto routing_start = Clock::now();
-        report.moves = router_.planStep();
+        report.moves = router_.planStep(trace);
         report.routing_microseconds = elapsedMicroseconds(routing_start);
         report.evacuation_targets = router_.evacuationTargets();
         report.crossing_modules = router_.crossingModules();
@@ -111,6 +111,8 @@ StepReport ExecutionLoop::step() {
         acceptArrivals(arrivals, report);
         report.evacuated = router_.evacuatedLastStep();
         acceptStarts(upper_.tryStartPlacedOperations(router_.activationHolds()), report);
+    } else if (trace) {
+        *trace = RouteDecisionTrace{trace->droplet};
     }
 
     for (const auto& [operation, cycles] : running_before) {

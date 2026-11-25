@@ -23,6 +23,7 @@ using dmf::paper::sourcePorts;
 using dmf::paper::outcomesFor;
 using dmf::paper::feedbackFor;
 constexpr int max_steps = 1000;
+constexpr dmf::DropletId watched_droplet = 1;
 
 std::string csvText(const std::string& value) {
     std::string quoted = "\"";
@@ -33,8 +34,67 @@ std::string csvText(const std::string& value) {
     return quoted + '"';
 }
 
+const char* stateName(dmf::OperationState state) {
+    switch (state) {
+        case dmf::OperationState::Waiting: return "waiting";
+        case dmf::OperationState::Placed: return "placed";
+        case dmf::OperationState::Running: return "running";
+        case dmf::OperationState::Completed: return "completed";
+    }
+    throw std::logic_error("unknown operation state");
+}
+
+void writeTraceStep(std::ostream& out, const dmf::StepReport& report,
+                    const dmf::RouteDecisionTrace& decision,
+                    const dmf::DropletPositions& positions,
+                    const dmf::UpperLayer& upper, dmf::OperationState mix,
+                    dmf::OperationState detect) {
+    const auto point = [&out](dmf::Point p) { out << '(' << p.x << ',' << p.y << ')'; };
+    const auto module = [&](const dmf::VirtualModule& m) {
+        out << ' ' << m.id << '@';
+        point(m.top_left);
+        out << ':' << m.side;
+    };
+    out << "step=" << report.step << " mix_0=" << stateName(mix)
+        << " detect_0=" << stateName(detect)
+        << " stale_uses=" << report.stale_field_decisions;
+    out << " positions_end:";
+    for (const auto& [droplet, position] : positions) {
+        out << " d" << droplet << '@';
+        point(position);
+    }
+    out << " | active_end:";
+    for (const auto& m : upper.activeBlockages()) module(m);
+    out << " | reserved_end:";
+    for (const auto& m : upper.upcomingBlockages()) module(m.module);
+    out << '\n';
+    if (decision.action.empty()) return;
+
+    out << "  d" << decision.droplet << ' ' << decision.action << " from=";
+    point(decision.from);
+    out << " target=";
+    point(decision.target);
+    out << " chosen=";
+    point(decision.chosen);
+    out << " layout=" << decision.layout_version;
+    if (decision.field_version) out << " field=" << *decision.field_version;
+    for (const auto& candidate : decision.candidates) {
+        out << " | ";
+        point(candidate.point);
+        if (!candidate.rejection.empty()) {
+            out << '=' << candidate.rejection;
+        } else {
+            out << "=score:" << candidate.cost << "/next:" << candidate.future_cost;
+            if (candidate.backtracks) out << "/backtrack";
+        }
+    }
+    out << '\n';
+}
+
 dmf::ExperimentSummary runTrial(const std::vector<std::string>& outcomes,
-                                dmf::BranchActivationMode mode) {
+                                dmf::BranchActivationMode mode,
+                                dmf::CostFieldMode field_mode = dmf::CostFieldMode::Asynchronous,
+                                std::ostream* trace = nullptr) {
     dmf::DynamicDag dag(dmf::paper::makeProtocol());
     const auto start_block = dag.activateStart({});
     if (dag.operationCount() != 4 * group_count) {
@@ -51,7 +111,8 @@ dmf::ExperimentSummary runTrial(const std::vector<std::string>& outcomes,
         {{dmf::OperationType::Output, {29, 0}},
          {dmf::OperationType::Waste, {0, 29}}},
         sourcePorts());
-    dmf::Router router(chip.width(), chip.height(), positions);
+    dmf::Router router(chip.width(), chip.height(), positions, upper.minimumSeparation(),
+                       field_mode);
     const auto feedback = feedbackFor(outcomes);
     dmf::ExecutionLoop loop(
         dag, upper, router,
@@ -66,11 +127,14 @@ dmf::ExperimentSummary runTrial(const std::vector<std::string>& outcomes,
     std::map<dmf::DropletId, dmf::Point> active_targets;
     int activated_outputs = 0;
     int activated_waste = 0;
+    const auto mix = dag.operationFor(start_block, mixName(0));
+    const auto detect = dag.operationFor(start_block, detectName(0));
+    dmf::RouteDecisionTrace decision{watched_droplet};
 
     using Clock = std::chrono::steady_clock;
     for (int step = 0; step < max_steps && !loop.allDone(); ++step) {
         const auto start = Clock::now();
-        const auto report = loop.step();
+        const auto report = loop.step(trace ? &decision : nullptr);
         const auto micros = std::chrono::duration_cast<std::chrono::microseconds>(
             Clock::now() - start).count();
         metrics.observe(report, positions, micros);
@@ -83,6 +147,10 @@ dmf::ExperimentSummary runTrial(const std::vector<std::string>& outcomes,
         }
         for (const auto& arrival : report.route_arrivals) {
             active_targets.erase(arrival.droplet);
+        }
+        if (trace) {
+            writeTraceStep(*trace, report, decision, positions, upper,
+                           dag.operation(mix).state, dag.operation(detect).state);
         }
     }
     if (!loop.allDone()) {
@@ -191,9 +259,56 @@ RunCounts runExperiments(std::ostream& out, bool scenario_one_only) {
     return counts;
 }
 
+int diagnose(const std::string& pattern) {
+    if (pattern.size() != group_count || pattern.find_first_not_of("OW") != std::string::npos) {
+        std::cerr << "diagnostic pattern must contain exactly nine O/W letters\n";
+        return 2;
+    }
+    std::vector<std::string> outcomes;
+    for (const char branch : pattern) outcomes.emplace_back(branch == 'O' ? "output" : "waste");
+    std::ofstream output("paper_parallel_diagnosis.txt");
+    if (!output) {
+        std::cerr << "cannot create paper_parallel_diagnosis.txt\n";
+        return 1;
+    }
+    bool all_complete = true;
+    for (const auto field_mode : {dmf::CostFieldMode::Asynchronous,
+                                  dmf::CostFieldMode::WaitForLatest}) {
+        const auto label = field_mode == dmf::CostFieldMode::Asynchronous ? "async" : "fresh";
+        std::ostringstream trace;
+        trace << "pattern=" << pattern << " mode=immediate field_mode=" << label
+              << " watched_droplet=" << watched_droplet << '\n';
+        std::string result;
+        try {
+            const auto summary = runTrial(outcomes, dmf::BranchActivationMode::Immediate,
+                                          field_mode, &trace);
+            result = "complete, steps=" + std::to_string(summary.steps);
+        } catch (const dmf::ExperimentTimeout& error) {
+            all_complete = false;
+            result = std::string("timeout: ") + error.what();
+        } catch (const std::exception& error) {
+            all_complete = false;
+            result = std::string("failed: ") + error.what();
+        }
+        output << trace.str() << "result=" << result << "\n\n";
+        std::cout << label << ": " << result << '\n';
+    }
+    if (!output) {
+        std::cerr << "cannot write paper_parallel_diagnosis.txt\n";
+        return 1;
+    }
+    std::cout << "trace: paper_parallel_diagnosis.txt\n";
+    return all_complete ? 0 : 1;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
+    if (argc > 1 && std::string(argv[1]) == "--diagnose") {
+        if (argc <= 3) return diagnose(argc == 3 ? argv[2] : "WOOOOOWWW");
+        std::cerr << "usage: dmf_paper_parallel_experiments --diagnose [OOOOOOOOW]\n";
+        return 2;
+    }
     const bool all_scenarios = argc > 1 && std::string(argv[1]) == "--all";
     if (argc > (all_scenarios ? 3 : 2)) {
         std::cerr << "usage: dmf_paper_parallel_experiments [--all] [output.csv]\n";

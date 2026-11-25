@@ -10,6 +10,7 @@
 #include <memory>
 #include <optional>
 #include <set>
+#include <string_view>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -32,16 +33,38 @@ struct MoveFeedback {
     Point observed;
 };
 
+enum class CostFieldMode { Asynchronous, WaitForLatest };
+
+struct RouteCandidateTrace {
+    Point point;
+    std::string_view rejection;
+    int cost = 0;
+    int future_cost = 0;
+    bool backtracks = false;
+};
+
+struct RouteDecisionTrace {
+    DropletId droplet;
+    Point from{};
+    Point target{};
+    Point chosen{};
+    std::string_view action{};
+    std::uint64_t layout_version = 0;
+    std::optional<std::uint64_t> field_version{};
+    std::vector<RouteCandidateTrace> candidates{};
+};
+
 // Cached BFS fields account for the target and its allowed upcoming module.
 class Router {
 public:
     Router(int width, int height, DropletPositions& positions,
-           int minimum_separation = 2);
+           int minimum_separation = 2,
+           CostFieldMode field_mode = CostFieldMode::Asynchronous);
 
     std::vector<RouteArrival> addTasks(const std::vector<RoutingTask>& tasks);
     void setBlockages(const std::vector<VirtualModule>& modules);
     void setUpcomingBlockages(const std::vector<UpcomingBlockage>& modules);
-    std::vector<MoveCommand> planStep();
+    std::vector<MoveCommand> planStep(RouteDecisionTrace* trace = nullptr);
     std::vector<RouteArrival> applyFeedback(const std::vector<MoveFeedback>& feedback);
     void prepareUpcomingCrossings();
     void waitForCostFieldUpdates();  // Explicit barrier for reproducible experiments.
@@ -78,6 +101,7 @@ private:
     int width_;
     int height_;
     int minimum_separation_;
+    CostFieldMode field_mode_;
     DropletPositions& positions_;
     DropletPositions previous_positions_;
     std::map<DropletId, RoutingTask> tasks_;
@@ -110,7 +134,9 @@ private:
     int index(Point point) const;
     std::array<Point, 4> neighbors(Point point) const;
     Occupancy occupancy() const;
-    bool legal(Point candidate, DropletId droplet, const Occupancy& occupancy) const;
+    const char* positionRejection(Point candidate, DropletId droplet,
+                                  const Occupancy& occupied) const;
+    bool legal(Point candidate, DropletId droplet, const Occupancy& occupied) const;
     bool upcomingBlocks(Point point, int allowed_module) const;
     int upcomingRegion(Point point) const;
     bool needsEvacuation(DropletId droplet, Point position) const;

@@ -15,8 +15,9 @@ constexpr int unreachable = std::numeric_limits<int>::max();
 }
 
 Router::Router(int width, int height, DropletPositions& positions,
-               int minimum_separation)
+               int minimum_separation, CostFieldMode field_mode)
     : width_(width), height_(height), minimum_separation_(minimum_separation),
+      field_mode_(field_mode),
       positions_(positions), previous_positions_(positions) {
     if (width <= 0 || height <= 0 || minimum_separation < 1) {
         throw std::invalid_argument("invalid router dimensions or separation");
@@ -63,23 +64,30 @@ Router::Occupancy Router::occupancy() const {
     return result;
 }
 
-bool Router::legal(Point candidate, DropletId droplet,
-                   const Occupancy& occupied) const {
-    if (!contains(candidate) || blocked_[index(candidate)]) return false;
+const char* Router::positionRejection(Point candidate, DropletId droplet,
+                                      const Occupancy& occupied) const {
+    if (!contains(candidate)) return "outside";
+    if (blocked_[index(candidate)]) return "active_blockage";
     const int radius = minimum_separation_ - 1;
     for (int y = std::max(0, candidate.y - radius);
          y <= std::min(height_ - 1, candidate.y + radius); ++y) {
         for (int x = std::max(0, candidate.x - radius);
              x <= std::min(width_ - 1, candidate.x + radius); ++x) {
             const auto cell = index({x, y});
-            if ((occupied.current[cell] != 0 && occupied.current[cell] != droplet) ||
-                (occupied.previous[cell] != 0 && occupied.previous[cell] != droplet) ||
-                (occupied.planned[cell] != 0 && occupied.planned[cell] != droplet)) {
-                return false;
-            }
+            if (occupied.current[cell] != 0 && occupied.current[cell] != droplet)
+                return "near_current";
+            if (occupied.previous[cell] != 0 && occupied.previous[cell] != droplet)
+                return "near_previous";
+            if (occupied.planned[cell] != 0 && occupied.planned[cell] != droplet)
+                return "near_planned";
         }
     }
-    return true;
+    return nullptr;
+}
+
+bool Router::legal(Point candidate, DropletId droplet,
+                   const Occupancy& occupied) const {
+    return positionRejection(candidate, droplet, occupied) == nullptr;
 }
 
 int Router::upcomingRegion(Point point) const {
@@ -452,8 +460,10 @@ void Router::setUpcomingBlockages(const std::vector<UpcomingBlockage>& modules) 
     environmentChanged();
 }
 
-std::vector<MoveCommand> Router::planStep() {
+std::vector<MoveCommand> Router::planStep(RouteDecisionTrace* trace) {
     if (!pending_.empty()) throw std::logic_error("movement feedback is still pending");
+    if (trace) *trace = RouteDecisionTrace{trace->droplet};
+    if (field_mode_ == CostFieldMode::WaitForLatest) waitForCostFieldUpdates();
     prepareUpcomingCrossings();
     waiting_for_crossing_.clear();
     auto occupied = occupancy();
@@ -477,12 +487,21 @@ std::vector<MoveCommand> Router::planStep() {
         const auto current = positions_.at(droplet);
         const auto crossing = crossing_modules_.find(droplet);
         const auto evacuation = evacuation_targets_.find(droplet);
-        if (evacuation == evacuation_targets_.end() &&
-            needsEvacuation(droplet, current)) continue;
         const bool evacuating = evacuation != evacuation_targets_.end();
         const auto target = evacuating ? evacuation->second : tasks_.at(droplet).target;
+        const bool watched = trace && trace->droplet == droplet;
+        if (watched) {
+            trace->from = trace->chosen = current;
+            trace->target = target;
+            trace->layout_version = field_snapshot_->version;
+        }
+        if (!evacuating && needsEvacuation(droplet, current)) {
+            if (watched) trace->action = "waiting_for_evacuation";
+            continue;
+        }
         if (!evacuating && crossing == crossing_modules_.end() &&
             modules_with_crossings.count(tasks_.at(droplet).module_id) != 0) {
+            if (watched) trace->action = "waiting_for_crossing";
             occupied.planned[index(current)] = droplet;
             pending_.push_back({droplet, current, current});
             continue;
@@ -491,6 +510,10 @@ std::vector<MoveCommand> Router::planStep() {
             const auto next = nextCrossingMove(droplet, crossing->second, occupied);
             if (!next) waiting_for_crossing_.push_back(droplet);
             const auto chosen = next.value_or(current);
+            if (watched) {
+                trace->action = next ? "crossing" : "waiting_for_crossing";
+                trace->chosen = chosen;
+            }
             if (!legal(chosen, droplet, occupied)) {
                 throw std::logic_error("no safe position for crossing droplet");
             }
@@ -504,6 +527,10 @@ std::vector<MoveCommand> Router::planStep() {
         else if (owner != upcoming_input_owners_.end()) allowed_module = owner->second;
         const int occupied_region = evacuating ? upcomingRegion(current) : 0;
         const auto& field = fieldFor(target, allowed_module);
+        if (watched) {
+            trace->action = evacuating ? "evacuation" : "routing";
+            trace->field_version = field_versions_.at({index(target), allowed_module});
+        }
         Point chosen = current;
         int best_cost = unreachable;
         int best_future = unreachable;
@@ -511,20 +538,30 @@ std::vector<MoveCommand> Router::planStep() {
         auto candidates = neighbors(current);
         if (droplet % 2 == 0) std::swap(candidates[1], candidates[3]);
         for (const auto candidate : candidates) {
-            if (!legal(candidate, droplet, occupied)) continue;
-            if (evacuating) {
+            const char* rejection = positionRejection(candidate, droplet, occupied);
+            if (!rejection && evacuating) {
                 const int region = upcomingRegion(candidate);
-                if (region != 0 && region != occupied_region) continue;
-            } else if (upcomingBlocks(candidate, allowed_module)) {
+                if (region != 0 && region != occupied_region) rejection = "reserved_module";
+            } else if (!rejection && upcomingBlocks(candidate, allowed_module)) {
+                rejection = "reserved_module";
+            }
+            if (rejection) {
+                if (watched) trace->candidates.push_back({candidate, rejection});
                 continue;
             }
             const int cost = field[index(candidate)];
-            if (cost == unreachable) continue;
+            if (cost == unreachable) {
+                if (watched) trace->candidates.push_back({candidate, "field_unreachable"});
+                continue;
+            }
             const int future = futureCost(candidate, droplet, occupied, field);
             const auto previous = previous_positions_.find(droplet);
             const bool backtracks = previous != previous_positions_.end() &&
                                     candidate == previous->second;
             const int adjusted_cost = cost + (backtracks ? 3 : 0);
+            if (watched) {
+                trace->candidates.push_back({candidate, {}, adjusted_cost, future, backtracks});
+            }
             if (adjusted_cost < best_cost ||
                 (adjusted_cost == best_cost && future < best_future) ||
                 (adjusted_cost == best_cost && future == best_future &&
@@ -538,6 +575,7 @@ std::vector<MoveCommand> Router::planStep() {
         if (!legal(chosen, droplet, occupied)) {
             throw std::logic_error("no safe position for routing droplet");
         }
+        if (watched) trace->chosen = chosen;
         if (evacuating && chosen == current &&
             std::find(waiting_for_evacuation_.begin(),
                       waiting_for_evacuation_.end(), droplet) ==

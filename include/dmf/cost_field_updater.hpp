@@ -54,8 +54,8 @@ private:
     std::map<CostFieldKey, Job> pending_;
     std::map<CostFieldKey, Result> completed_;
     std::map<CostFieldKey, std::uint64_t> latest_version_;
-    std::thread worker_;
     bool stopping_ = false;
+    std::thread worker_;  // Starts after the state read by run() is initialized.
 
     void run();
 };

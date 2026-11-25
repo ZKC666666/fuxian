@@ -1,6 +1,7 @@
 #include "dmf/cost_field_updater.hpp"
 #include "dmf/router.hpp"
 
+#include <algorithm>
 #include <iostream>
 #include <memory>
 #include <stdexcept>
@@ -93,6 +94,29 @@ void sharedTargetReusesOneBackgroundJob() {
           "shared target built duplicate background fields");
 }
 
+void diagnosticDecisionUsesLatestFieldAndReportsBlockedCandidate() {
+    dmf::DropletPositions positions{{1, {0, 4}}};
+    dmf::Router router(9, 9, positions, 2, dmf::CostFieldMode::WaitForLatest);
+    router.addTasks({{1, 1, {8, 4}, 0}});
+    const auto first = router.planStep().at(0);
+    router.applyFeedback({{1, first.to}});
+    router.setBlockages({{1, {2, 4}, 1}});
+
+    dmf::RouteDecisionTrace trace{1};
+    const auto detour = router.planStep(&trace).at(0);
+    const auto blocked = std::find_if(trace.candidates.begin(), trace.candidates.end(),
+                                      [](const auto& candidate) {
+                                          return candidate.point == dmf::Point{2, 4};
+                                      });
+    check(trace.action == "routing" && trace.chosen == detour.to &&
+              trace.field_version && *trace.field_version == trace.layout_version &&
+              router.asyncFieldSwaps() == 1 && router.staleFieldDecisions() == 0,
+          "diagnostic decision did not wait for the new layout");
+    check(blocked != trace.candidates.end() && blocked->rejection == "active_blockage",
+          "diagnostic trace did not explain why the straight move is forbidden");
+    router.applyFeedback({{1, detour.to}});
+}
+
 }  // namespace
 
 int main() {
@@ -101,6 +125,7 @@ int main() {
         staleFieldNeverOverridesHardBlockage();
         rapidUpdatesDiscardOldGenerations();
         sharedTargetReusesOneBackgroundJob();
+        diagnosticDecisionUsesLatestFieldAndReportsBlockedCandidate();
         std::cout << "async cost field tests: passed\n";
     } catch (const std::exception& error) {
         std::cerr << "async cost field tests: " << error.what() << '\n';
