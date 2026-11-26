@@ -12,12 +12,12 @@ WASTE = (0, EDGE)
 ALL_OUTPUT = "O" * 25
 
 
-def boundary_pair(edge: int, center: int) -> Pair:
+def boundary_pair(edge: int, center: int, extent: int = EDGE) -> Pair:
     return (
         ((0, center - 1), (0, center + 1)),
-        ((EDGE, center - 1), (EDGE, center + 1)),
+        ((extent, center - 1), (extent, center + 1)),
         ((center - 1, 0), (center + 1, 0)),
-        ((center - 1, EDGE), (center + 1, EDGE)),
+        ((center - 1, extent), (center + 1, extent)),
     )[edge]
 
 
@@ -31,11 +31,12 @@ def balanced() -> list[Pair]:
     return pairs
 
 
-def west_weighted(counts: tuple[int, int, int]) -> list[Pair]:
+def west_weighted(counts: tuple[int, int, int], extent: int = EDGE) -> list[Pair]:
+    slots = (extent - 7) // 4 + 1
     sides = []
     for edge, count in zip((0, 2, 3), counts):
-        centers = [4 + 4 * ((2 * i + 1) * 14 // (2 * count)) for i in range(count)]
-        sides.append([boundary_pair(edge, center) for center in centers])
+        centers = [4 + 4 * ((2 * i + 1) * slots // (2 * count)) for i in range(count)]
+        sides.append([boundary_pair(edge, center, extent) for center in centers])
     return [side[i] for i in range(max(counts)) for side in sides if i < len(side)]
 
 

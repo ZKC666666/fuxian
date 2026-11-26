@@ -186,7 +186,7 @@ TrialResult runTrial(const ParallelCase& config, const std::vector<std::string>&
          {dmf::OperationType::Detect, {3, 3, settings.detect_cycles}}},
         positions,
         {{dmf::OperationType::Output, settings.output_port},
-         {dmf::OperationType::Waste, config.wastePort()}},
+         {dmf::OperationType::Waste, settings.waste_port.value_or(config.wastePort())}},
         settings.inlets ? *settings.inlets : sourcePorts(config));
     dmf::Router router(chip.width(), chip.height(), positions, upper.minimumSeparation(),
                        field_mode);
@@ -395,7 +395,7 @@ void checkTrialTimeline(const TrialResult& trial, int groups, int outputs,
 }
 
 int runParameterTrials(const std::string& path, const std::vector<CalibrationCase>& profiles,
-                       int repeats) {
+                       int repeats, bool include_waste_port = false) {
     std::ofstream out(path);
     if (!out) {
         std::cerr << "cannot create " << path << '\n';
@@ -403,7 +403,9 @@ int runParameterTrials(const std::string& path, const std::vector<CalibrationCas
     }
     out << "profile,repeat,chip_side,groups,output_x,output_y,mix_cycles,detect_cycles,mode,status,"
            "steps,first_detect_step,last_detect_step,first_output_move_step,last_output_arrival_step,"
-           "route_requests,route_arrivals,error\n";
+           "route_requests,route_arrivals,error";
+    if (include_waste_port) out << ",waste_x,waste_y";
+    out << '\n';
     RunCounts counts;
     for (const auto& profile : profiles) {
         const auto& config = profile.chip;
@@ -439,11 +441,16 @@ int runParameterTrials(const std::string& path, const std::vector<CalibrationCas
                         << trial.metrics.steps << ',' << time.first_detect << ',' << time.last_detect
                         << ',' << time.first_output_move << ',' << time.last_output_arrival
                         << ',' << trial.metrics.route_requests << ',' << trial.metrics.route_arrivals
-                        << ',' << csvText(trial.failure.empty() ? trial.timeout : trial.failure) << '\n';
+                        << ',' << csvText(trial.failure.empty() ? trial.timeout : trial.failure);
                 } catch (const std::exception& error) {
                     ++counts.failed;
-                    out << "failed,,,,,,,," << csvText(error.what()) << '\n';
+                    out << "failed,,,,,,,," << csvText(error.what());
                 }
+                if (include_waste_port) {
+                    const auto waste = s.waste_port.value_or(config.wastePort());
+                    out << ',' << waste.x << ',' << waste.y;
+                }
+                out << '\n';
             }
         }
     }
@@ -487,7 +494,7 @@ int runCalibration(int argc, char** argv) {
     }
     try {
         const auto cases = dmf::paper::loadCalibrationCases(argv[2]);
-        return runParameterTrials(argv[3], cases, repeats);
+        return runParameterTrials(argv[3], cases, repeats, true);
     } catch (const std::exception& error) {
         std::cerr << "calibration: " << error.what() << '\n';
         return 2;

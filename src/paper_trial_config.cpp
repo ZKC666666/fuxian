@@ -17,7 +17,7 @@ void validatePorts(const ParallelCase& chip, const TrialSettings& settings) {
         return p.x >= 0 && p.x <= edge && p.y >= 0 && p.y <= edge &&
                (p.x == 0 || p.x == edge || p.y == 0 || p.y == edge);
     };
-    std::vector<Point> placed{chip.wastePort()};
+    std::vector<Point> placed;
     const auto add_port = [&](Point p) {
         if (!on_boundary(p)) throw std::invalid_argument("port is outside the chip boundary");
         for (const auto q : placed) {
@@ -27,6 +27,7 @@ void validatePorts(const ParallelCase& chip, const TrialSettings& settings) {
         }
         placed.push_back(p);
     };
+    add_port(settings.waste_port.value_or(chip.wastePort()));
     add_port(settings.output_port);
     const auto ports = settings.inlets ? *settings.inlets : sourcePorts(chip);
     for (const auto& port : ports) add_port(port.second);
@@ -50,6 +51,15 @@ CalibrationCase readCase(std::istringstream& row, std::string name) {
         throw std::invalid_argument("Mix and Detect timings must be between 1 and 200");
     }
     row >> std::ws;
+    if (!row.eof() && row.peek() == 'w') {
+        std::string marker;
+        Point waste{};
+        if (!(row >> marker >> waste.x >> waste.y) || marker != "waste") {
+            throw std::invalid_argument("expected waste x y");
+        }
+        settings.waste_port = waste;
+        row >> std::ws;
+    }
     if (!row.eof()) {
         settings.inlets.emplace();
         for (int group = 0; group < groups; ++group) {

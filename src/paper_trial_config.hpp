@@ -11,6 +11,7 @@ struct TrialSettings {
     int mix_cycles = 3;
     int detect_cycles = 2;
     std::optional<std::map<std::string, Point>> inlets = std::nullopt;
+    std::optional<Point> waste_port = std::nullopt;
 };
 
 struct CalibrationCase {
