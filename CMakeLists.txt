@@ -21,7 +21,8 @@ add_executable(dmf_parallel_experiments src/parallel_experiments.cpp
 target_link_libraries(dmf_parallel_experiments PRIVATE dmf_core)
 
 add_executable(dmf_paper_parallel_experiments src/paper_parallel_experiments.cpp
-                                              src/paper_parallel_case.cpp)
+                                              src/paper_parallel_case.cpp
+                                              src/paper_trial_config.cpp)
 target_link_libraries(dmf_paper_parallel_experiments PRIVATE dmf_core)
 
 add_executable(dmf_custom_route src/custom_route.cpp src/custom_route_case.cpp)
@@ -113,6 +114,9 @@ add_test(NAME paper_parallel_sensitivity
          "-DEXPERIMENT=$<TARGET_FILE:dmf_paper_parallel_experiments>"
          "-DCSV=${CMAKE_CURRENT_BINARY_DIR}/paper_parallel_sensitivity_check.csv"
          -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/check_paper_sensitivity.cmake")
+add_test(NAME paper_parallel_calibration COMMAND dmf_paper_parallel_experiments
+         --calibrate "${CMAKE_CURRENT_SOURCE_DIR}/examples/table_i_calibration.txt"
+         paper_parallel_calibration_check.csv 1)
 add_test(NAME crossing_demo COMMAND am_dmf crossing)
 add_test(NAME async_demo COMMAND am_dmf async)
 add_test(NAME evacuation_demo COMMAND am_dmf evacuation)

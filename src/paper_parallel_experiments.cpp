@@ -1,5 +1,6 @@
 #include "dmf/experiment_metrics.hpp"
 #include "paper_parallel_case.hpp"
+#include "paper_trial_config.hpp"
 
 #include <algorithm>
 #include <array>
@@ -28,6 +29,8 @@ using dmf::paper::sourcePorts;
 using dmf::paper::outcomesFor;
 using dmf::paper::feedbackFor;
 using dmf::paper::ParallelCase;
+using dmf::paper::TrialSettings;
+using dmf::paper::CalibrationCase;
 constexpr int max_steps = 1000;
 constexpr dmf::DropletId watched_droplet = 1;
 constexpr char regression_pattern[] = "WOOOOOWWW";
@@ -109,12 +112,6 @@ void writeTraceStep(std::ostream& out, const dmf::StepReport& report,
     out << '\n';
 }
 
-struct TrialSettings {
-    dmf::Point output_port;
-    int mix_cycles = 3;
-    int detect_cycles = 2;
-};
-
 struct TrialMilestones {
     int first_detect = 0;
     int last_detect = 0;
@@ -180,7 +177,8 @@ TrialResult runTrial(const ParallelCase& config, const std::vector<std::string>&
     dmf::DropletPositions positions;
     dmf::VirtualChip chip(config.modules_per_side, config.modules_per_side, 3,
                          config.chip_side, config.chip_side);
-    const auto settings = override_settings ? *override_settings : TrialSettings{config.outputPort()};
+    const TrialSettings defaults{config.outputPort()};
+    const auto& settings = override_settings ? *override_settings : defaults;
     dmf::UpperLayer upper(
         dag, chip,
         {{dmf::OperationType::Dispense, {1, 1, 1}},
@@ -189,7 +187,7 @@ TrialResult runTrial(const ParallelCase& config, const std::vector<std::string>&
         positions,
         {{dmf::OperationType::Output, settings.output_port},
          {dmf::OperationType::Waste, config.wastePort()}},
-        sourcePorts(config));
+        settings.inlets ? *settings.inlets : sourcePorts(config));
     dmf::Router router(chip.width(), chip.height(), positions, upper.minimumSeparation(),
                        field_mode);
     const auto feedback = feedbackFor(outcomes);
@@ -378,35 +376,26 @@ void checkOutputSeparation(const ParallelCase& config, dmf::Point output) {
     }
 }
 
-void checkSensitivityTimeline(const TrialResult& trial, int groups,
-                              dmf::BranchActivationMode mode) {
+void checkTrialTimeline(const TrialResult& trial, int groups, int outputs,
+                        dmf::BranchActivationMode mode) {
     const auto& time = trial.milestones;
     const int release_after = mode == dmf::BranchActivationMode::StaticBatch ?
         time.last_detect : time.first_detect;
-    if (time.completed_detections != groups || time.output_arrivals != groups ||
-        time.first_detect <= 0 || time.last_detect < time.first_detect ||
-        time.first_output_move <= release_after ||
-        time.last_output_arrival < time.first_output_move ||
-        time.last_output_arrival + 1 != trial.metrics.steps) {
-        throw std::logic_error("sensitivity timeline has missing or out-of-order events");
+    if (time.completed_detections != groups || time.output_arrivals != outputs ||
+        time.first_detect <= 0 || time.last_detect < time.first_detect) {
+        throw std::logic_error("trial timeline has missing detections or output arrivals");
+    }
+    if (outputs > 0 &&
+        (time.first_output_move <= release_after ||
+         time.last_output_arrival < time.first_output_move ||
+         time.last_output_arrival >= trial.metrics.steps ||
+         (outputs == groups && time.last_output_arrival + 1 != trial.metrics.steps))) {
+        throw std::logic_error("trial timeline has out-of-order output events");
     }
 }
 
-int runSensitivity(const std::string& path) {
-    const auto config = *dmf::paper::caseForGroups(25);
-    const std::vector<std::string> outcomes(config.groups, "output");
-    struct Profile {
-        const char* name;
-        TrialSettings settings;
-    };
-    const std::array<Profile, 4> profiles{{
-        {"reference", {config.outputPort()}},
-        {"output_middle", {{59, 29}}},
-        {"mix_longer", {config.outputPort(), 6, 2}},
-        {"detect_longer", {config.outputPort(), 3, 4}}
-    }};
-    for (const auto& profile : profiles) checkOutputSeparation(config, profile.settings.output_port);
-
+int runParameterTrials(const std::string& path, const std::vector<CalibrationCase>& profiles,
+                       int repeats) {
     std::ofstream out(path);
     if (!out) {
         std::cerr << "cannot create " << path << '\n';
@@ -417,7 +406,14 @@ int runSensitivity(const std::string& path) {
            "route_requests,route_arrivals,error\n";
     RunCounts counts;
     for (const auto& profile : profiles) {
-        for (int repeat = 1; repeat <= 5; ++repeat) {
+        const auto& config = profile.chip;
+        std::vector<std::string> outcomes;
+        for (const char branch : profile.branches) {
+            outcomes.emplace_back(branch == 'O' ? "output" : "waste");
+        }
+        const int outputs = static_cast<int>(std::count(profile.branches.begin(),
+                                                       profile.branches.end(), 'O'));
+        for (int repeat = 1; repeat <= repeats; ++repeat) {
             for (const auto mode : {dmf::BranchActivationMode::Immediate,
                                     dmf::BranchActivationMode::StaticBatch}) {
                 const auto& s = profile.settings;
@@ -435,7 +431,7 @@ int runSensitivity(const std::string& path) {
                         status = "timeout";
                         ++counts.timeout;
                     } else {
-                        checkSensitivityTimeline(trial, config.groups, mode);
+                        checkTrialTimeline(trial, config.groups, outputs, mode);
                         ++counts.complete;
                     }
                     const auto& time = trial.milestones;
@@ -459,6 +455,43 @@ int runSensitivity(const std::string& path) {
     std::cout << "wrote " << path << "; complete=" << counts.complete
               << ", timeout=" << counts.timeout << ", failed=" << counts.failed << '\n';
     return counts.timeout == 0 && counts.failed == 0 ? 0 : 1;
+}
+
+int runSensitivity(const std::string& path) {
+    const auto config = *dmf::paper::caseForGroups(25);
+    const std::string branches(config.groups, 'O');
+    const std::vector<CalibrationCase> profiles{
+        {"reference", config, {config.outputPort()}, branches},
+        {"output_middle", config, {{59, 29}}, branches},
+        {"mix_longer", config, {config.outputPort(), 6, 2}, branches},
+        {"detect_longer", config, {config.outputPort(), 3, 4}, branches}
+    };
+    for (const auto& profile : profiles) checkOutputSeparation(config, profile.settings.output_port);
+    return runParameterTrials(path, profiles, 5);
+}
+
+int runCalibration(int argc, char** argv) {
+    if (argc != 4 && argc != 5) {
+        std::cerr << "usage: dmf_paper_parallel_experiments --calibrate cases.txt results.csv [repeats]\n";
+        return 2;
+    }
+    int repeats = 5;
+    if (argc == 5) {
+        const std::string_view value(argv[4]);
+        const auto parsed = std::from_chars(value.data(), value.data() + value.size(), repeats);
+        if (parsed.ec != std::errc{} || parsed.ptr != value.data() + value.size() ||
+            repeats < 1 || repeats > 50) {
+            std::cerr << "calibration repeats must be between 1 and 50\n";
+            return 2;
+        }
+    }
+    try {
+        const auto cases = dmf::paper::loadCalibrationCases(argv[2]);
+        return runParameterTrials(argv[3], cases, repeats);
+    } catch (const std::exception& error) {
+        std::cerr << "calibration: " << error.what() << '\n';
+        return 2;
+    }
 }
 
 int diagnose(const ParallelCase& config, const std::string& pattern,
@@ -529,6 +562,7 @@ int checkSeed1601() {
 }  // namespace
 
 int main(int argc, char** argv) {
+    if (argc >= 2 && std::string_view(argv[1]) == "--calibrate") return runCalibration(argc, argv);
     if (argc == 2 && std::string_view(argv[1]) == "--check-1601") return checkSeed1601();
     if (argc >= 2 && std::string_view(argv[1]) == "--sensitivity") {
         if (argc <= 3) return runSensitivity(argc == 3 ? argv[2] : "paper_parallel_sensitivity.csv");
