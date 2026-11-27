@@ -70,6 +70,8 @@ public:
     TerminalBatchPlan planTerminalBatch(const std::vector<RoutingTask>& tasks) const;
     void replayTerminalStep(const std::vector<MoveCommand>& moves);
     std::vector<RouteArrival> applyFeedback(const std::vector<MoveFeedback>& feedback);
+    void recordIdleStep();
+    bool hasPreviousClearance(Point point) const;
     void prepareUpcomingCrossings();
     void waitForCostFieldUpdates();  // Explicit barrier for reproducible experiments.
 

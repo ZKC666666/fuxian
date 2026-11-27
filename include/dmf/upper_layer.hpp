@@ -32,6 +32,7 @@ public:
 
     bool hasPlacement(OperationInstanceId operation) const;
     int durationFor(OperationInstanceId operation) const;
+    std::optional<Point> dispensePortOf(OperationInstanceId operation) const;
     const VirtualModule& moduleFor(OperationInstanceId operation) const;
     std::vector<VirtualModule> activeBlockages() const;
     std::vector<UpcomingBlockage> upcomingBlockages() const;

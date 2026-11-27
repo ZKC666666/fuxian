@@ -32,6 +32,8 @@ public:
     explicit DynamicDag(Protocol protocol);
 
     BlockInstanceId activateStart(std::vector<DropletId> entry_droplets);
+    BlockInstanceId activateReadyBlock(const std::string& block,
+                                       std::vector<DropletId> entry_droplets);
     std::vector<OperationInstanceId> readyOperations() const;
     std::optional<std::vector<DropletId>> inputsIfReady(OperationInstanceId id) const;
     std::vector<DropletId> reserveOperation(OperationInstanceId id);

@@ -87,6 +87,8 @@ private:
     void updateBlockages(StepReport& report);
     void prepareCrossings(StepReport& report);
     void prepareTerminalBatch(StepReport& report);
+    bool canFinishOperation(OperationInstanceId operation,
+                            const std::vector<DropletId>& outputs) const;
 };
 
 }  // namespace dmf

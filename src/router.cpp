@@ -6,6 +6,7 @@
 #include <queue>
 #include <set>
 #include <stdexcept>
+#include <string>
 #include <utility>
 
 namespace dmf {
@@ -105,6 +106,22 @@ const char* Router::positionRejection(Point candidate, DropletId droplet,
 bool Router::legal(Point candidate, DropletId droplet,
                    const Occupancy& occupied) const {
     return positionRejection(candidate, droplet, occupied) == nullptr;
+}
+
+bool Router::hasPreviousClearance(Point point) const {
+    for (const auto& [droplet, previous] : previous_positions_) {
+        if (std::max(std::abs(point.x - previous.x), std::abs(point.y - previous.y))
+                < minimum_separation_ && positions_.count(droplet) != 0) {
+            return false;
+        }
+    }
+    return true;
+}
+
+void Router::recordIdleStep() {
+    if (!pending_.empty()) throw std::logic_error("movement feedback is still pending");
+    // Without movement, current positions also cover the preceding positions.
+    previous_positions_.clear();
 }
 
 int Router::upcomingRegion(Point point) const {
@@ -677,8 +694,10 @@ std::vector<MoveCommand> Router::planStep(RouteDecisionTrace* trace) {
                 best_backtracks = backtracks;
             }
         }
-        if (!legal(chosen, droplet, occupied)) {
-            throw std::logic_error("no safe position for routing droplet");
+        if (const auto* reason = positionRejection(chosen, droplet, occupied)) {
+            throw std::logic_error("no safe position for routing droplet " +
+                                   std::to_string(droplet) + " at (" + std::to_string(chosen.x) +
+                                   "," + std::to_string(chosen.y) + "): " + reason);
         }
         if (watched) trace->chosen = chosen;
         if (evacuating && chosen == current &&

@@ -42,7 +42,8 @@ public:
     int height() const { return height_; }
     int moduleSide() const { return module_side_; }
     std::optional<VirtualModule> nearestFree(
-        const std::vector<Point>& input_positions, ModuleProfile profile) const;
+        const std::vector<Point>& input_positions, ModuleProfile profile,
+        const std::vector<Point>& occupied = {}) const;
     void reserve(int module_id, OperationInstanceId operation);
     void release(int module_id, OperationInstanceId operation);
     bool isReserved(int module_id) const;

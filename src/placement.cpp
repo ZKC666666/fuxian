@@ -55,7 +55,8 @@ bool VirtualChip::contains(Point point) const {
 }
 
 std::optional<VirtualModule> VirtualChip::nearestFree(
-    const std::vector<Point>& input_positions, ModuleProfile profile) const {
+    const std::vector<Point>& input_positions, ModuleProfile profile,
+    const std::vector<Point>& occupied) const {
     if (input_positions.empty() || profile.width <= 0 || profile.height <= 0 ||
         profile.width > module_side_ || profile.height > module_side_) {
         throw std::invalid_argument("invalid module placement request");
@@ -73,6 +74,15 @@ std::optional<VirtualModule> VirtualChip::nearestFree(
     const auto count = static_cast<long long>(input_positions.size());
     for (const auto& module : modules_) {
         if (isReserved(module.id)) continue;
+        bool has_unrelated_droplet = false;
+        for (const auto p : occupied) {
+            if (p.x >= module.top_left.x && p.x < module.top_left.x + module.side &&
+                p.y >= module.top_left.y && p.y < module.top_left.y + module.side) {
+                has_unrelated_droplet = true;
+                break;
+            }
+        }
+        if (has_unrelated_droplet) continue;
         const auto center = module.center();
         const long long dx = count * center.x - sum_x;
         const long long dy = count * center.y - sum_y;

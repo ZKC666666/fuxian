@@ -40,6 +40,21 @@ BlockInstanceId DynamicDag::addBlock(const std::string& spec_id,
     return block_id;
 }
 
+BlockInstanceId DynamicDag::activateReadyBlock(const std::string& block,
+                                               std::vector<DropletId> entries) {
+    if (blocks_.empty()) throw std::logic_error("start block was not activated");
+    std::set<DropletId> unique;
+    for (const auto droplet : entries) {
+        const bool ready = available_droplets_.count(droplet) != 0 ||
+            std::find(pending_outputs_.begin(), pending_outputs_.end(), droplet) !=
+                pending_outputs_.end();
+        if (!ready || !unique.insert(droplet).second) {
+            throw std::invalid_argument("block inputs must be available and distinct");
+        }
+    }
+    return addBlock(block, std::move(entries));
+}
+
 const OperationSpec& DynamicDag::specFor(const OperationInstance& instance) const {
     const auto& block = protocol_.block(blocks_.at(instance.block_instance).spec_id);
     const auto found = std::find_if(block.operations.begin(), block.operations.end(),

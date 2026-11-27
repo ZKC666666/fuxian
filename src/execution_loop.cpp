@@ -150,8 +150,9 @@ StepReport ExecutionLoop::step(RouteDecisionTrace* trace) {
         acceptArrivals(arrivals, report);
         report.evacuated = router_.evacuatedLastStep();
         acceptStarts(upper_.tryStartPlacedOperations(router_.activationHolds()), report);
-    } else if (trace) {
-        *trace = RouteDecisionTrace{trace->droplet};
+    } else {
+        router_.recordIdleStep();
+        if (trace) *trace = RouteDecisionTrace{trace->droplet};
     }
 
     for (const auto& [operation, cycles] : running_before) {
@@ -165,7 +166,7 @@ StepReport ExecutionLoop::step(RouteDecisionTrace* trace) {
                            .emplace(operation, completion_feedback_provider_(operation))
                            .first;
         }
-        if (!upper_.canFinishOperation(operation, feedback->second.outputs)) {
+        if (!canFinishOperation(operation, feedback->second.outputs)) {
             report.waiting_for_output_space.push_back(operation);
             continue;
         }
@@ -183,6 +184,13 @@ StepReport ExecutionLoop::step(RouteDecisionTrace* trace) {
     return report;
 }
 
+bool ExecutionLoop::canFinishOperation(OperationInstanceId operation,
+                                       const std::vector<DropletId>& outputs) const {
+    const auto port = upper_.dispensePortOf(operation);
+    return (!port || router_.hasPreviousClearance(*port)) &&
+           upper_.canFinishOperation(operation, outputs);
+}
+
 void ExecutionLoop::completeEarly(OperationInstanceId operation,
                                   CompletionFeedback feedback) {
     if (remaining_cycles_.count(operation) == 0) {
@@ -194,7 +202,7 @@ void ExecutionLoop::completeEarly(OperationInstanceId operation,
          pending->second.outcome != feedback.outcome)) {
         throw std::invalid_argument("completion feedback changed while output is waiting");
     }
-    if (!upper_.canFinishOperation(operation, feedback.outputs)) {
+    if (!canFinishOperation(operation, feedback.outputs)) {
         throw std::logic_error("operation output positions are occupied");
     }
     upper_.finishOperation(operation, std::move(feedback.outputs),

@@ -25,6 +25,9 @@ add_executable(dmf_paper_parallel_experiments src/paper_parallel_experiments.cpp
                                               src/paper_trial_config.cpp)
 target_link_libraries(dmf_paper_parallel_experiments PRIVATE dmf_core)
 
+add_executable(dmf_paper_table_ii src/paper_table_ii.cpp)
+target_link_libraries(dmf_paper_table_ii PRIVATE dmf_core)
+
 add_executable(dmf_custom_route src/custom_route.cpp src/custom_route_case.cpp)
 target_link_libraries(dmf_custom_route PRIVATE dmf_core)
 target_compile_definitions(dmf_custom_route PRIVATE
@@ -72,7 +75,7 @@ add_executable(dmf_field_benchmark benchmarks/field_update_benchmark.cpp)
 target_link_libraries(dmf_field_benchmark PRIVATE dmf_core)
 
 foreach(target dmf_core am_dmf dmf_parallel_experiments
-               dmf_paper_parallel_experiments dmf_custom_route dmf_runtime_tests
+               dmf_paper_parallel_experiments dmf_paper_table_ii dmf_custom_route dmf_runtime_tests
                dmf_placement_tests dmf_router_tests dmf_execution_tests
                dmf_protocol_execution_tests dmf_evacuation_tests
                dmf_async_cost_field_tests dmf_crossing_tests
@@ -117,6 +120,8 @@ add_test(NAME paper_parallel_sensitivity
 add_test(NAME paper_parallel_calibration COMMAND dmf_paper_parallel_experiments
          --calibrate "${CMAKE_CURRENT_SOURCE_DIR}/examples/table_i_calibration.txt"
          paper_parallel_calibration_check.csv 1)
+add_test(NAME paper_table_ii_pilot COMMAND dmf_paper_table_ii
+         --pilot paper_table_ii_pilot_check.csv)
 add_test(NAME crossing_demo COMMAND am_dmf crossing)
 add_test(NAME async_demo COMMAND am_dmf async)
 add_test(NAME evacuation_demo COMMAND am_dmf evacuation)

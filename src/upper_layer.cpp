@@ -69,7 +69,7 @@ std::vector<Point> UpperLayer::targetsFor(OperationType type,
                                            const VirtualModule& module,
                                            std::size_t input_count) {
     const auto center = module.center();
-    if (type == OperationType::Mix && input_count == 2) {
+    if ((type == OperationType::Mix || type == OperationType::Detect) && input_count == 2) {
         return {{center.x - 1, center.y}, {center.x + 1, center.y}};
     }
     if ((type == OperationType::Detect || type == OperationType::Split) &&
@@ -121,7 +121,15 @@ std::vector<RoutingTask> UpperLayer::placeReadyOperations() {
 
         std::vector<Point> positions;
         for (const auto droplet : *inputs) positions.push_back(positions_.at(droplet));
-        const auto module = chip_.nearestFree(positions, profile->second);
+        std::vector<Point> occupied;
+        if (type == OperationType::Detect && inputs->size() == 2) {
+            for (const auto& [droplet, point] : positions_) {
+                if (std::find(inputs->begin(), inputs->end(), droplet) == inputs->end()) {
+                    occupied.push_back(point);
+                }
+            }
+        }
+        const auto module = chip_.nearestFree(positions, profile->second, occupied);
         if (!module) continue;
         const auto targets = targetsFor(profile->first, *module, inputs->size());
 
@@ -195,8 +203,9 @@ std::vector<Point> UpperLayer::outputPositions(
     OperationInstanceId operation, const Placement& placement) const {
     switch (dag_.operationType(operation)) {
         case OperationType::Dispense: return {*placement.dispense_port};
-        case OperationType::Mix:
-        case OperationType::Detect: return {placement.module->center()};
+        case OperationType::Mix: return {placement.module->center()};
+        case OperationType::Detect:
+            return targetsFor(OperationType::Detect, *placement.module, placement.inputs.size());
         case OperationType::Split: {
             const auto center = placement.module->center();
             return {{center.x - 1, center.y}, {center.x + 1, center.y}};
@@ -285,6 +294,10 @@ const VirtualModule& UpperLayer::moduleFor(OperationInstanceId operation) const 
     const auto& module = placements_.at(operation).module;
     if (!module) throw std::logic_error("terminal operation has no module");
     return *module;
+}
+
+std::optional<Point> UpperLayer::dispensePortOf(OperationInstanceId operation) const {
+    return placements_.at(operation).dispense_port;
 }
 
 std::vector<VirtualModule> UpperLayer::activeBlockages() const {

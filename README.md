@@ -2,7 +2,7 @@
 
 本工程依据论文 [A Two-Layer Decoupled Synthesis Framework for Uncertain Biochemical Protocols on Active-Matrix Digital Microfluidic Platforms](https://doi.org/10.1109/TCAD.2026.3721419) 逐步复现。论文给出了框架和伪代码，没有公开完整实现与实验生成程序。工程使用 C++17，文档使用中文。
 
-当前 `main` 分支处于 **v1.11：Table I 全场景参数筛选与独立复核**。每个正式版本都用 Git 标签保存，桌面的 `PROJECT/versions/版本号` 是可独立用 Visual Studio 打开的源码副本。此前的探索原型保存在 Git 标签 `v0.0-prototype`。
+本源码为 **v1.12：Table II 变长流程仿真**。每个正式版本都用 Git 标签保存，桌面的 `PROJECT/versions/版本号` 可独立用 Visual Studio 打开。此前的探索原型保存在 Git 标签 `v0.0-prototype`。
 
 ## 先理解两个图
 
@@ -541,6 +541,40 @@ Table III 提供了一条额外的约束。若沿用本工程的控制步定义�
 
 ```powershell
 python "C:\Users\ZKC\Desktop\PROJECT\versions\v1.11\benchmarks\table_i_joint.py" ".\dmf_paper_parallel_experiments.exe" ".\table-i-v1.11-recheck"
+```
+
+## v1.12 Table II 变长流程仿真
+
+Table II 的每组液滴先检测。首轮不合格时，把两滴都送到 Waste，再从本组原来的入口重放两滴。合格液滴在模块内等待。所有组合格并到位后，最终 Mix 在同一个控制步启动。首轮沿用 v1.11 的 **Dispense 1 步、Detect 8 步、Mix 29 步**，以及 30×30、60×60 阵列的 3×3 模块网格和左下角 Waste。
+
+- **仿真假设。** 一次成对 Detect 用 8 步表示对两滴的检查，完成后仍各占原来的位置。入口对均匀分布在四条边上。同样组数的三个 30×30 配置使用相同的模块和入口布局。每一轮依据 100%、90%、80%、70% 的标称首次通过率，把未通过的组数四舍五入到整数，再用固定种子挑出具体组。首轮失败的组补做一次就通过。用最终 Mix 完成作为计步终点。原文的具体首轮失败名单、重试序列、布局和操作时长仍未公开确认。
+- **动态模式 `immediate`。** 某组检测未通过，就把本组的丢弃任务加入运行中的 DAG。两滴废液都到达 Waste 后，再加入该组的重试任务。不同组的准备、检测和废液输运可以交错。
+- **批次模式 `batch_plan`。** 每批次先用工程现有的 Placer 和 Router 推演该阶段的完整控制序列，再回放并核对液滴的最终位置，完成后才处理新解锁的阶段。Short 共计划两批。含重试的案例依次规划首轮检查、丢弃、重试和最终 Mix。该工程对照沿用同一选址和路由策略，论文批次基线的全局优化细节仍待确认。
+- **自动核对。** 完成时核对检查次数、重试次数、丢弃数、路由到达数和最终混合数。只有所有最终 Mix 在同一步启动，且批次回放状态与规划一致，试验才记为完成。第一轮无补液位置历史检查时有 14 次在补液附近触发安全失败，诊断文件保留了坐标和原因。现在放液前同时检查上一拍位置，未满足间距就延后释放。
+
+### 与论文对比
+
+6 个配置、4 种路径、每种 5 条固定输入、每条输入跑两种模式，共 **240 次**。完整跑了两轮，每轮 **240/240** 完成。两轮有 10 行汇总的均值不同，同一列的最大重跑差异是 7.6 步，反映异步代价场时机会影响部分输运轨迹。下表使用第一轮数据，每行取 5 次均值。
+
+| 配置 | 路径 | 论文动态 / 批次 | 仿真动态 / 批次 |
+| --- | --- | ---: | ---: |
+| 30×30、12 组，N2 C1 M4 | Short | 98.0 / 92.0 | 81.0 / 81.0 |
+| 30×30、12 组，N2 C1 M4 | Medium-1 | 134.2 / 131.4 | 103.4 / 131.2 |
+| 30×30、12 组，N2 C1 M4 | Medium-2 | 103.4 / 136.2 | 112.6 / 148.0 |
+| 30×30、12 组，N2 C1 M4 | Long | 167.0 / 226.2 | 138.6 / 166.0 |
+| 60×60、49 组，N5 C2 M7 | Long | 470.33 / 551.80 | 327.8 / 374.2 |
+
+动态、批次两列的总步数平均绝对相对误差分别为 **20.14%** 和 **21.52%**，两列合计 **20.83%**。论文 24 行的动态模式相对批次模式节省多少步，仿真与论文平均还差 **19.28 步**。六个配置的 Long 都比 Short 用步更多，复现了重试使流程变长的趋势。部分行偏差仍大。例如 49 组的 Long 场景，动态模式少了 **142.53 步**，批次模式少了 **177.60 步**。更少的步数可能来自布局和重试设定，无法凭这一值判断算法性能。仿真计时列 `avg_cpp_step_ms` 仅是 C++ 控制循环平均用时，论文 DecT 的口径未对齐。
+
+逐次输入、步数、重试次数、回放批数和失败信息见 [Table II 实验记录](benchmarks/table_ii_v1_12)。`comparison.csv` 包含全部 24 行，`rerun_comparison.csv` 是固定输入重跑，`before_clearance_fix.csv` 是补液安全修正前的诊断数据。
+
+### 在 Visual Studio 复跑
+
+打开桌面的 `PROJECT/versions/v1.12`，选择目标 `dmf_paper_table_ii.exe`。直接运行会做 12 组的 Short、Long 试验。要运行全表，可以把 `--all paper_table_ii_trials.csv` 填入启动参数，或在可执行文件所在目录运行：
+
+```powershell
+.\dmf_paper_table_ii.exe --all paper_table_ii_trials.csv
+python "C:\Users\ZKC\Desktop\PROJECT\versions\v1.12\benchmarks\table_ii_compare.py" paper_table_ii_trials.csv table_ii_comparison.csv
 ```
 
 ## 编译与运行
